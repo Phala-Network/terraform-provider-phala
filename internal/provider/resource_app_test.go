@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -231,6 +232,44 @@ func TestAppResourceWaitForAppReadyFailsFastOnStoppedReplica(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "stopped") {
 		t.Fatalf("expected error to include stopped status, got: %v", err)
+	}
+}
+
+func TestAppResourceWaitForAppDeletionRetriesTransientVerificationErrors(t *testing.T) {
+	var listCalls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/apps/test/cvms":
+			switch listCalls.Add(1) {
+			case 1:
+				writeJSON(t, w, http.StatusServiceUnavailable, `{"message":"backend busy"}`)
+			case 2:
+				writeJSON(t, w, http.StatusOK, `[{"vm_uuid":"cvm123","status":"deleting"}]`)
+			default:
+				writeJSON(t, w, http.StatusOK, `[]`)
+			}
+			return
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, "not found")
+		}
+	}))
+	defer srv.Close()
+
+	resource := &appResource{
+		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+	}
+
+	confirmed, err := resource.waitForAppDeletion(context.Background(), "test", time.Now().Add(2*time.Second), time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected delete wait error: %v", err)
+	}
+	if !confirmed {
+		t.Fatal("expected deletion to be confirmed after retry")
+	}
+	if calls := listCalls.Load(); calls < 3 {
+		t.Fatalf("expected delete wait to continue polling after retryable error, got %d list calls", calls)
 	}
 }
 

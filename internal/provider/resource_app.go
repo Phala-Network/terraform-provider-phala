@@ -545,27 +545,17 @@ func (r *appResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 	}
 
 	deleteTimeout := waitTimeout(state.WaitTimeoutSecond)
-	deadline := time.Now().Add(deleteTimeout)
-	for time.Now().Before(deadline) {
-		refreshed, err := r.fetchAppCVMs(ctx, appID)
-		if err != nil {
-			if isNotFound(err) {
-				return
-			}
-			if !isRetryable(err) {
-				resp.Diagnostics.AddError("Delete verification failed", err.Error())
-				return
-			}
+	confirmed, err := r.waitForAppDeletion(ctx, appID, time.Now().Add(deleteTimeout), 2*time.Second)
+	if err != nil {
+		title := "Delete verification failed"
+		if ctx.Err() != nil {
+			title = "Delete wait interrupted"
 		}
-		if len(refreshed) == 0 {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			resp.Diagnostics.AddError("Delete wait interrupted", ctx.Err().Error())
-			return
-		case <-time.After(pollInterval(2 * time.Second)):
-		}
+		resp.Diagnostics.AddError(title, err.Error())
+		return
+	}
+	if confirmed {
+		return
 	}
 
 	resp.Diagnostics.AddError(
@@ -760,6 +750,35 @@ func (r *appResource) waitForReplicaCount(ctx context.Context, appID string, tar
 		}
 	}
 	return fmt.Errorf("timeout waiting for app %q to reach %d replicas", appID, target)
+}
+
+func (r *appResource) waitForAppDeletion(ctx context.Context, appID string, deadline time.Time, pollBase time.Duration) (bool, error) {
+	for time.Now().Before(deadline) {
+		refreshed, err := r.fetchAppCVMs(ctx, appID)
+		if err != nil {
+			if isNotFound(err) {
+				return true, nil
+			}
+			if isRetryable(err) {
+				select {
+				case <-ctx.Done():
+					return false, ctx.Err()
+				case <-time.After(pollInterval(pollBase)):
+					continue
+				}
+			}
+			return false, err
+		}
+		if len(refreshed) == 0 {
+			return true, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(pollInterval(pollBase)):
+		}
+	}
+	return false, nil
 }
 
 func (r *appResource) waitForAppReady(ctx context.Context, appID string, replicas int, timeout time.Duration) error {
