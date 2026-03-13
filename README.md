@@ -103,6 +103,10 @@ A complete copy of this example also lives in [examples/app-quickstart](/home/h4
 
 If you want to test unreleased provider code from this repo, skip this path and use `Developer Mode` below.
 
+## License
+
+This repository uses the Apache 2.0 license, matching the other open source Phala Cloud components. See [LICENSE](/home/h4x/workspace/terraform-provider-phala/LICENSE).
+
 ## Common Tasks
 
 ### Discover available sizes, regions, images, nodes, and workspace info
