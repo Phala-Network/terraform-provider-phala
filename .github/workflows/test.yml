@@ -11,7 +11,11 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - terraform-provider-phala
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
