@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Phala-Network/phala-cloud/terraform/internal/phalaapi"
+	"github.com/Phala-Network/terraform-provider-phala/internal/phalaapi"
 )
 
 func newTypedClient(baseURL, apiKey, apiVersion string, httpClient *http.Client) *phalaapi.ClientWithResponses {

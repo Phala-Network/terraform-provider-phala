@@ -25,30 +25,36 @@ Before cutting a release:
 ## Build Release Artifacts Locally
 
 ```bash
-cd terraform
 make package-release VERSION=0.2.0
 ```
 
 Outputs:
 
 - `dist/0.2.0/terraform-provider-phala_0.2.0_<os>_<arch>.zip`
+- `dist/0.2.0/terraform-provider-phala_0.2.0_manifest.json`
 - `dist/0.2.0/terraform-provider-phala_0.2.0_SHA256SUMS`
+- `dist/0.2.0/terraform-provider-phala_0.2.0_SHA256SUMS.sig` (when GPG signing is configured locally)
 
 ## GitHub Release Workflow
 
-Use workflow: `Terraform Provider Release`
+This repository publishes from semver git tags like `v0.2.0` or `v0.2.0-beta.1`.
 
-Inputs:
+The release workflow:
 
-- `version`: `0.2.0` (no `v` prefix)
-- `prerelease`: `true|false`
+1. Triggers on a pushed `v*` tag.
+2. Imports the configured GPG signing key.
+3. Uses GoReleaser to build cross-platform archives.
+4. Publishes a GitHub release with provider zips, manifest, signed checksums, and release notes.
 
-The workflow:
+Required repository secrets:
 
-1. Runs tests.
-2. Builds cross-platform release artifacts.
-3. Creates tag `terraform-provider-phala/v<version>`.
-4. Publishes a GitHub release with zipped binaries + checksums.
+- `GPG_PRIVATE_KEY`
+- `PASSPHRASE`
+
+Required Terraform Registry setup outside GitHub:
+
+1. Claim the `phala-network` public namespace.
+2. Upload the matching ASCII-armored public key on the namespace Signing Keys page.
 
 ## Post-release Validation
 

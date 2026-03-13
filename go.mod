@@ -1,4 +1,4 @@
-module github.com/Phala-Network/phala-cloud/terraform
+module github.com/Phala-Network/terraform-provider-phala
 
 go 1.24.0
 

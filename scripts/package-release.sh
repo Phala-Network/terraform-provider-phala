@@ -18,7 +18,9 @@ fi
 
 mkdir -p "$DIST_DIR"
 rm -f "$DIST_DIR"/terraform-provider-phala_"$VERSION"_*.zip
+rm -f "$DIST_DIR"/terraform-provider-phala_"$VERSION"_manifest.json
 rm -f "$DIST_DIR"/terraform-provider-phala_"$VERSION"_SHA256SUMS
+rm -f "$DIST_DIR"/terraform-provider-phala_"$VERSION"_SHA256SUMS.sig
 
 TARGETS=(
   "linux/amd64"
@@ -57,9 +59,25 @@ for target in "${TARGETS[@]}"; do
   trap - EXIT
 done
 
+cp "$ROOT_DIR/terraform-registry-manifest.json" "$DIST_DIR/terraform-provider-phala_${VERSION}_manifest.json"
+
 (
   cd "$DIST_DIR"
-  shasum -a 256 terraform-provider-phala_"$VERSION"_*.zip > terraform-provider-phala_"$VERSION"_SHA256SUMS
+  shasum -a 256 \
+    terraform-provider-phala_"$VERSION"_*.zip \
+    terraform-provider-phala_"$VERSION"_manifest.json \
+    > terraform-provider-phala_"$VERSION"_SHA256SUMS
 )
+
+if command -v gpg >/dev/null 2>&1 && [[ -n "${GPG_FINGERPRINT:-}" ]]; then
+  (
+    cd "$DIST_DIR"
+    gpg --batch --local-user "$GPG_FINGERPRINT" \
+      --output "terraform-provider-phala_${VERSION}_SHA256SUMS.sig" \
+      --detach-sign "terraform-provider-phala_${VERSION}_SHA256SUMS"
+  )
+else
+  echo "Skipping checksum signing (set GPG_FINGERPRINT and ensure gpg is installed to generate .sig)"
+fi
 
 echo "Release artifacts generated in: $DIST_DIR"

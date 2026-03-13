@@ -28,7 +28,7 @@ SIZE ?= tdx.small
 REGION ?=
 IMAGE ?=
 
-.PHONY: fmt fmt-check test vet ci build build-release package-release devrc smoke-init smoke-plan smoke-apply smoke-destroy release-dry-run
+.PHONY: fmt fmt-check test vet ci generate docs build build-release package-release devrc smoke-init smoke-plan smoke-apply smoke-destroy release-dry-run
 
 build:
 	@mkdir -p "$(DEV_PLUGIN_DIR)"
@@ -58,6 +58,11 @@ vet:
 	$(GO) vet ./...
 
 ci: fmt-check vet test build-release
+
+generate: docs
+
+docs:
+	go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@v0.24.0 generate --provider-name phala
 
 devrc:
 	@mkdir -p "$(DEV_PLUGIN_DIR)"

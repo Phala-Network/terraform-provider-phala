@@ -98,7 +98,7 @@ What success looks like:
 - Terraform prints a public `endpoint`.
 - The app appears in your Phala Cloud dashboard and reaches running state.
 
-A complete copy of this example also lives in [examples/app-quickstart](/home/h4x/workspace/phala-cloud/terraform/examples/app-quickstart).
+A complete copy of this example also lives in [examples/app-quickstart](./examples/app-quickstart).
 
 If you want to test unreleased provider code from this repo, skip this path and use `Developer Mode` below.
 
@@ -267,14 +267,12 @@ The repo includes a smoke fixture and `make` targets under [`examples/smoke`](./
 Read-only smoke (catalog data sources only):
 
 ```bash
-cd terraform
 make smoke-plan PHALA_API_KEY="phak_xxx" CREATE_RESOURCES=false
 ```
 
 Create + destroy smoke:
 
 ```bash
-cd terraform
 make smoke-apply \
   PHALA_API_KEY="phak_xxx" \
   CREATE_RESOURCES=true \
@@ -395,15 +393,10 @@ Release process and gates: [RELEASE.md](./RELEASE.md)
 ### Release Quick Path
 
 ```bash
-cd terraform
 make ci
 make package-release VERSION=0.2.0
 ```
-
-Then run the `Terraform Provider Release` GitHub workflow with:
-
-- `version=0.2.0`
-- `prerelease=false` (or `true` for prerelease channels)
+Then push a release tag such as `v0.2.0` or `v0.2.0-beta.1` to trigger the GitHub release workflow.
 
 ## OpenAPI-generated Client
 
