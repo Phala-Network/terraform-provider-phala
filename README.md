@@ -28,7 +28,6 @@ export PHALA_CLOUD_API_KEY="phak_xxx"
 Provider environment variables:
 
 - `PHALA_CLOUD_API_KEY`
-- `PHALA_CLOUD_API_PREFIX`
 
 ## Quick Start
 
@@ -252,6 +251,16 @@ resource "phala_app" "pinned" {
 ## Developer Mode (Contributors)
 
 Use this only when developing the provider from source (dev overrides + local binary).
+
+### Advanced provider override
+
+Most users should not set `api_prefix` or `PHALA_CLOUD_API_PREFIX`.
+
+The provider defaults to the public Phala Cloud API. The base URL override exists for staging environments, local mocks, or temporary infrastructure migrations:
+
+```bash
+export PHALA_CLOUD_API_PREFIX="https://cloud-api.phala.com/api/v1"
+```
 
 The repo includes a smoke fixture and `make` targets under [`examples/smoke`](./examples/smoke). This is for coverage and regression testing, not for first-time user onboarding.
 
