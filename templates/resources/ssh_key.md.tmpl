@@ -1,0 +1,18 @@
+---
+page_title: "{{ .Name }} Resource - {{ .ProviderShortName }}"
+subcategory: ""
+description: |-
+  {{ .Description }}
+---
+
+# {{ .Name }} ({{ .Type }})
+
+{{ .Description }}
+
+Use `phala_ssh_key` to manage account-level SSH keys that can later be referenced or copied into deployment flows.
+
+## Example Usage
+
+{{ tffile "examples/resources/phala_ssh_key/resource.tf" }}
+
+{{ .SchemaMarkdown }}

@@ -1,0 +1,18 @@
+---
+page_title: "{{ .Name }} Resource - {{ .ProviderShortName }}"
+subcategory: ""
+description: |-
+  {{ .Description }}
+---
+
+# {{ .Name }} ({{ .Type }})
+
+{{ .Description }}
+
+Use this resource when you want Terraform to converge a CVM to `running` or `stopped` without recreating the parent app.
+
+## Example Usage
+
+{{ tffile "examples/resources/phala_cvm_power/resource.tf" }}
+
+{{ .SchemaMarkdown }}

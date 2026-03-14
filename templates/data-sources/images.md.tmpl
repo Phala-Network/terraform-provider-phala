@@ -1,0 +1,18 @@
+---
+page_title: "{{ .Name }} Data Source - {{ .ProviderShortName }}"
+subcategory: ""
+description: |-
+  {{ .Description }}
+---
+
+# {{ .Name }} ({{ .Type }})
+
+{{ .Description }}
+
+Use this data source to discover exact image slugs before setting `image` on `phala_app`.
+
+## Example Usage
+
+{{ tffile "examples/data-sources/phala_images/data-source.tf" }}
+
+{{ .SchemaMarkdown }}
