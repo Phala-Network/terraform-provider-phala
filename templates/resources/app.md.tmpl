@@ -1,0 +1,24 @@
+---
+page_title: "{{ .Name }} Resource - {{ .ProviderShortName }}"
+subcategory: ""
+description: |-
+  {{ .Description }}
+---
+
+# {{ .Name }} ({{ .Type }})
+
+{{ .Description }}
+
+## Example Usage
+
+{{ tffile "examples/resources/phala_app/resource.tf" }}
+
+## Behavior Notes
+
+- `phala_app` is the main lifecycle resource for Phala Cloud deployments.
+- `replicas` scales one app definition horizontally across multiple CVMs.
+- `docker_compose`, runtime visibility flags, and encrypted environment updates are applied across the app.
+- `wait_for_ready = true` waits until the app reports running replicas before returning.
+- `ssh_authorized_keys`, `storage_fs`, placement fields, and deterministic identity inputs can affect replacement behavior; check the schema details below before changing them in-place.
+
+{{ .SchemaMarkdown }}

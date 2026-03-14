@@ -1,0 +1,16 @@
+---
+page_title: "{{ .Name }} Data Source - {{ .ProviderShortName }}"
+subcategory: ""
+description: |-
+  {{ .Description }}
+---
+
+# {{ .Name }} ({{ .Type }})
+
+{{ .Description }}
+
+## Example Usage
+
+{{ tffile "examples/data-sources/phala_workspace/data-source.tf" }}
+
+{{ .SchemaMarkdown }}
