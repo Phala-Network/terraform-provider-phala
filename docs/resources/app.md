@@ -47,6 +47,7 @@ resource "phala_app" "web" {
 - `phala_app` is the main lifecycle resource for Phala Cloud deployments.
 - `replicas` scales one app definition horizontally across multiple CVMs.
 - `docker_compose`, runtime visibility flags, and encrypted environment updates are applied across the app.
+- `instances` exposes the current per-CVM member view without introducing backend-native ordinals.
 - `wait_for_ready = true` waits until the app reports running replicas before returning.
 - `ssh_authorized_keys`, `storage_fs`, placement fields, and deterministic identity inputs can affect replacement behavior; check the schema details below before changing them in-place.
 
@@ -92,7 +93,17 @@ resource "phala_app" "web" {
 - `cvm_ids` (List of String) Identifiers of CVMs currently attached to this app.
 - `endpoint` (String) Primary public endpoint URL.
 - `id` (String) Terraform ID (same as app_id).
+- `instances` (Attributes List) Computed per-instance view of CVMs currently attached to this app.
+  - `app_id` (String)
+  - `created_at` (String)
+  - `endpoint` (String)
+  - `id` (String)
+  - `instance_id` (String)
+  - `instance_type` (String)
+  - `name` (String)
+  - `region` (String)
+  - `status` (String)
+  - `vm_uuid` (String)
 - `primary_cvm_id` (String) Primary CVM identifier used for app-level patch operations.
 - `status` (String) Current CVM status.
-
 

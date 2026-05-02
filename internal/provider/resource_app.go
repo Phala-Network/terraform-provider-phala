@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -60,7 +61,40 @@ type appResourceModel struct {
 	Status             types.String `tfsdk:"status"`
 	PrimaryCVMID       types.String `tfsdk:"primary_cvm_id"`
 	CVMIDs             types.List   `tfsdk:"cvm_ids"`
+	Instances          types.List   `tfsdk:"instances"`
 	Endpoint           types.String `tfsdk:"endpoint"`
+}
+
+type appInstanceModel struct {
+	ID           types.String `tfsdk:"id"`
+	AppID        types.String `tfsdk:"app_id"`
+	Name         types.String `tfsdk:"name"`
+	VMUUID       types.String `tfsdk:"vm_uuid"`
+	InstanceID   types.String `tfsdk:"instance_id"`
+	Status       types.String `tfsdk:"status"`
+	Region       types.String `tfsdk:"region"`
+	InstanceType types.String `tfsdk:"instance_type"`
+	Endpoint     types.String `tfsdk:"endpoint"`
+	CreatedAt    types.String `tfsdk:"created_at"`
+}
+
+func appInstanceAttrTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"id":            types.StringType,
+		"app_id":        types.StringType,
+		"name":          types.StringType,
+		"vm_uuid":       types.StringType,
+		"instance_id":   types.StringType,
+		"status":        types.StringType,
+		"region":        types.StringType,
+		"instance_type": types.StringType,
+		"endpoint":      types.StringType,
+		"created_at":    types.StringType,
+	}
+}
+
+func appInstanceObjectType() types.ObjectType {
+	return types.ObjectType{AttrTypes: appInstanceAttrTypes()}
 }
 
 type appAPIResponse struct {
@@ -120,6 +154,24 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 		Computed:            true,
 		ElementType:         types.StringType,
 		MarkdownDescription: "Identifiers of CVMs currently attached to this app.",
+	}
+	attrs["instances"] = schema.ListNestedAttribute{
+		Computed:            true,
+		MarkdownDescription: "Computed per-instance view of CVMs currently attached to this app.",
+		NestedObject: schema.NestedAttributeObject{
+			Attributes: map[string]schema.Attribute{
+				"id":            schema.StringAttribute{Computed: true},
+				"app_id":        schema.StringAttribute{Computed: true},
+				"name":          schema.StringAttribute{Computed: true},
+				"vm_uuid":       schema.StringAttribute{Computed: true},
+				"instance_id":   schema.StringAttribute{Computed: true},
+				"status":        schema.StringAttribute{Computed: true},
+				"region":        schema.StringAttribute{Computed: true},
+				"instance_type": schema.StringAttribute{Computed: true},
+				"endpoint":      schema.StringAttribute{Computed: true},
+				"created_at":    schema.StringAttribute{Computed: true},
+			},
+		},
 	}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a Phala Cloud App (app_id + shared compose/env + replica count).",
@@ -882,6 +934,7 @@ func (r *appResource) populateState(
 		state.Status = types.StringNull()
 		state.Endpoint = types.StringNull()
 		state.PrimaryCVMID = types.StringNull()
+		state.Instances = types.ListNull(appInstanceObjectType())
 		emptyIDs, listDiags := types.ListValueFrom(ctx, types.StringType, []string{})
 		diags.Append(listDiags...)
 		if !diags.HasError() {
@@ -917,7 +970,7 @@ func (r *appResource) populateState(
 		if primary.Resource != nil && primary.Resource.DiskInGB != nil {
 			state.DiskSize = types.Int64Value(*primary.Resource.DiskInGB)
 		}
-		if region := primary.region(); region != "" {
+		if region := primary.region(); region != "" && !state.Region.IsNull() && !state.Region.IsUnknown() {
 			state.Region = types.StringValue(region)
 		}
 		if image := primary.osImageName(); image != "" {
@@ -963,6 +1016,7 @@ func (r *appResource) populateState(
 	if len(cvms) == 0 {
 		if state.Replicas.IsNull() || state.Replicas.IsUnknown() || state.Replicas.ValueInt64() <= 0 {
 			state.Replicas = types.Int64Value(0)
+			state.Instances = types.ListNull(appInstanceObjectType())
 			emptyIDs, listDiags := types.ListValueFrom(ctx, types.StringType, []string{})
 			diags.Append(listDiags...)
 			if !diags.HasError() {
@@ -982,6 +1036,11 @@ func (r *appResource) populateState(
 	diags.Append(listDiags...)
 	if !diags.HasError() {
 		state.CVMIDs = listValue
+	}
+	instancesValue, instanceDiags := buildAppInstances(ctx, cvms)
+	diags.Append(instanceDiags...)
+	if !diags.HasError() {
+		state.Instances = instancesValue
 	}
 
 	return diags
@@ -1166,6 +1225,53 @@ func orderedReplicaIDs(cvms []cvmAPIResponse, preferred string) []string {
 		add(selectReplicaIdentifier(cvm))
 	}
 	return ids
+}
+
+func buildAppInstances(ctx context.Context, cvms []cvmAPIResponse) (types.List, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	ordered := append([]cvmAPIResponse(nil), cvms...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		leftCreated := strings.TrimSpace(ordered[i].CreatedAt)
+		rightCreated := strings.TrimSpace(ordered[j].CreatedAt)
+		if leftCreated != rightCreated {
+			if leftCreated == "" {
+				return false
+			}
+			if rightCreated == "" {
+				return true
+			}
+			return leftCreated < rightCreated
+		}
+
+		leftID := selectReplicaIdentifier(ordered[i])
+		rightID := selectReplicaIdentifier(ordered[j])
+		if leftID != rightID {
+			return leftID < rightID
+		}
+		return ordered[i].InstanceID < ordered[j].InstanceID
+	})
+
+	out := make([]appInstanceModel, 0, len(ordered))
+	for _, cvm := range ordered {
+		out = append(out, appInstanceModel{
+			ID:           nullableString(selectReplicaIdentifier(cvm)),
+			AppID:        nullableString(cvm.AppID),
+			Name:         nullableString(cvm.Name),
+			VMUUID:       nullableString(cvm.VMUUID),
+			InstanceID:   nullableString(cvm.InstanceID),
+			Status:       nullableString(cvm.Status),
+			Region:       nullableString(cvm.region()),
+			InstanceType: nullableString(cvm.instanceType()),
+			Endpoint:     nullableString(cvm.endpoint()),
+			CreatedAt:    nullableString(cvm.CreatedAt),
+		})
+	}
+	value, valueDiags := types.ListValueFrom(ctx, appInstanceObjectType(), out)
+	diags.Append(valueDiags...)
+	if diags.HasError() {
+		return types.ListNull(appInstanceObjectType()), diags
+	}
+	return value, diags
 }
 
 func (r *appResource) patchTextAcrossReplicas(
