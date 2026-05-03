@@ -197,6 +197,53 @@ func TestAppResourceEnvUpdateTriggersEnvsPATCH(t *testing.T) {
 	if got := envPatchCalls.Load(); got == 0 {
 		t.Fatal("regression: env PATCH was never called even though config env changed v1 -> v2")
 	}
+	if got := envPatchCalls.Load(); got != 1 {
+		t.Fatalf("regression: expected exactly 1 env PATCH after v1->v2 update, got %d", got)
+	}
+
+	// Step 4: re-plan + re-apply with the SAME config (env still v2). No env
+	// PATCH should fire — guarding against a regression where dropping the
+	// schema-level Sensitive flag spuriously triggers env replace on every
+	// apply.
+	createdV2State, _ := apply2.NewState.Unmarshal(objType)
+	var createdV2Attrs map[string]tftypes.Value
+	_ = createdV2State.As(&createdV2Attrs)
+
+	overlay2 := make(map[string]tftypes.Value, len(createdV2Attrs))
+	for k, v := range createdV2Attrs {
+		overlay2[k] = v
+	}
+	overlay2["env"] = tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, map[string]tftypes.Value{
+		"IMAGE": tftypes.NewValue(tftypes.String, "v2"),
+	})
+	proposedNoopDV, _ := tfprotov6.NewDynamicValue(objType, tftypes.NewValue(objType, overlay2))
+
+	plan3, err := server.PlanResourceChange(ctx, &tfprotov6.PlanResourceChangeRequest{
+		TypeName:         "phala_app",
+		PriorState:       apply2.NewState,
+		ProposedNewState: &proposedNoopDV,
+		Config:           &configV2DV,
+	})
+	if err != nil {
+		t.Fatalf("plan3: %v", err)
+	}
+	apply3, err := server.ApplyResourceChange(ctx, &tfprotov6.ApplyResourceChangeRequest{
+		TypeName:     "phala_app",
+		PriorState:   apply2.NewState,
+		PlannedState: plan3.PlannedState,
+		Config:       &configV2DV,
+	})
+	if err != nil {
+		t.Fatalf("apply3: %v", err)
+	}
+	for _, d := range apply3.Diagnostics {
+		if d.Severity == tfprotov6.DiagnosticSeverityError {
+			t.Fatalf("apply3 error: %s — %s", d.Summary, d.Detail)
+		}
+	}
+	if got := envPatchCalls.Load(); got != 1 {
+		t.Fatalf("regression: env PATCH fired on a no-op apply (env unchanged); call count went from 1 to %d", got)
+	}
 }
 
 const envUpdateTestPubkey = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
