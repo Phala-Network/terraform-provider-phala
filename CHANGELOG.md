@@ -4,6 +4,8 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0-beta.3] - 2026-05-03
+
 ### Fixed
 
 - In-place updates to `phala_app.env` are now applied. The schema-level `Sensitive: true` flag on the `env` map attribute interacted with element-level marks coming from `sensitive = true` Terraform variables and caused Terraform Core to silently suppress the in-place diff, so changing an env value used to report "No changes." and never call the API. To redact env values in plan output, mark the source variable with `sensitive = true` — the marks propagate per-element and Terraform redacts them. Fixes Phala-Network/phala-cloud#246.
