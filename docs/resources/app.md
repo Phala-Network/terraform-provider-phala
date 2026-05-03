@@ -64,7 +64,7 @@ resource "phala_app" "web" {
 - `custom_app_id` (String) Optional custom app_id for deterministic identity flow. Changing this forces replacement.
 - `disk_size` (Number) Disk size in GB.
 - `encrypted_env` (String, Sensitive) Hex-encoded encrypted env payload (manual mode).
-- `env` (Map of String, Sensitive) Plaintext env vars. Provider auto-derives env_keys and encrypts values before API submission. Plaintext still exists in Terraform state.
+- `env` (Map of String) Plaintext env vars. Values are encrypted before API submission, but plaintext is stored in Terraform state — pass secret values via variables marked `sensitive = true` to redact them in plan output.
 - `env_compose_hash` (String) Optional compose hash for phase-2 encrypted env update flow (contract-owned KMS; used with env_transaction_hash).
 - `env_keys` (List of String) Allowed environment variable keys used with encrypted_env/manual mode.
 - `env_transaction_hash` (String) Optional on-chain transaction hash for phase-2 encrypted env update flow (contract-owned KMS; used with env_compose_hash).

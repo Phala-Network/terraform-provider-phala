@@ -145,10 +145,10 @@ func sharedCVMSchemaAttrs() map[string]schema.Attribute {
 		},
 		"env": schema.MapAttribute{
 			Optional:    true,
-			Sensitive:   true,
 			ElementType: types.StringType,
-			MarkdownDescription: "Plaintext env vars. Provider auto-derives env_keys and encrypts values " +
-				"before API submission. Plaintext still exists in Terraform state.",
+			MarkdownDescription: "Plaintext env vars. Values are encrypted before API submission, " +
+				"but plaintext is stored in Terraform state — pass secret values via variables " +
+				"marked `sensitive = true` to redact them in plan output.",
 		},
 		"encrypted_env": schema.StringAttribute{
 			Optional:            true,
