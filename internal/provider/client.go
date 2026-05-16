@@ -131,8 +131,7 @@ func (c *APIClient) requestWithRetry(
 
 		apiErr, ok := err.(*APIError)
 		if !ok ||
-			!isRetryableStatus(apiErr.StatusCode) ||
-			!shouldRetryWrite(method, path) ||
+			!shouldRetryAPIError(method, path, apiErr) ||
 			attempt == maxWriteRetries {
 			return err
 		}
@@ -175,6 +174,32 @@ func shouldRetryWrite(method, path string) bool {
 	default:
 		return false
 	}
+}
+
+func shouldRetryAPIError(method, path string, apiErr *APIError) bool {
+	if apiErr == nil || !shouldRetryWrite(method, path) {
+		return false
+	}
+	if isRetryableStatus(apiErr.StatusCode) {
+		return true
+	}
+	return isRetryableProvisionCompatibilityError(method, path, apiErr)
+}
+
+func isRetryableProvisionCompatibilityError(method, path string, apiErr *APIError) bool {
+	if method != http.MethodPost || apiErr == nil || apiErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+
+	normalizedPath := normalizePath(path)
+	if normalizedPath != "/cvms/provision" {
+		if _, ok := extractCVMID(normalizedPath, "/compose_file/provision"); !ok {
+			return false
+		}
+	}
+
+	message := strings.ToLower(apiErr.Message + " " + apiErr.Body)
+	return strings.Contains(message, "configuration parameters are not compatible")
 }
 
 func isRetryableStatus(status int) bool {

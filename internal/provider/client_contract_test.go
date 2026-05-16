@@ -480,3 +480,33 @@ func TestAPIClientContract_RetriesOnlyReplaySafeWrites(t *testing.T) {
 		t.Fatalf("unexpected retry count for PATCH: got %d want 2", got)
 	}
 }
+
+func TestShouldRetryAPIError_ProvisionCompatibilityBadRequest(t *testing.T) {
+	err := &APIError{
+		StatusCode: http.StatusBadRequest,
+		Status:     "400 Bad Request",
+		Message:    "The configuration parameters are not compatible with each other",
+	}
+
+	if !shouldRetryAPIError(http.MethodPost, "/cvms/provision", err) {
+		t.Fatal("expected transient provision compatibility 400 to be retryable")
+	}
+	if !shouldRetryAPIError(http.MethodPost, "/cvms/cvm123/compose_file/provision", err) {
+		t.Fatal("expected transient compose-file provision compatibility 400 to be retryable")
+	}
+}
+
+func TestShouldRetryAPIError_DoesNotRetryGenericBadRequest(t *testing.T) {
+	err := &APIError{
+		StatusCode: http.StatusBadRequest,
+		Status:     "400 Bad Request",
+		Message:    "name is required",
+	}
+
+	if shouldRetryAPIError(http.MethodPost, "/cvms/provision", err) {
+		t.Fatal("expected generic provision 400 not to be retryable")
+	}
+	if shouldRetryAPIError(http.MethodPost, "/user/ssh-keys", err) {
+		t.Fatal("expected non-replay-safe create POST not to be retryable")
+	}
+}
