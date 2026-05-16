@@ -93,17 +93,25 @@ resource "phala_app" "web" {
 - `cvm_ids` (List of String) Identifiers of CVMs currently attached to this app.
 - `endpoint` (String) Primary public endpoint URL.
 - `id` (String) Terraform ID (same as app_id).
-- `instances` (Attributes List) Computed per-instance view of CVMs currently attached to this app.
-  - `app_id` (String)
-  - `created_at` (String)
-  - `endpoint` (String)
-  - `id` (String)
-  - `instance_id` (String)
-  - `instance_type` (String)
-  - `name` (String)
-  - `region` (String)
-  - `status` (String)
-  - `vm_uuid` (String)
+- `instances` (Attributes List) Computed per-instance view of CVMs currently attached to this app. (see [below for nested schema](#nestedatt--instances))
 - `primary_cvm_id` (String) Primary CVM identifier used for app-level patch operations.
 - `status` (String) Current CVM status.
+
+<a id="nestedatt--instances"></a>
+### Nested Schema for `instances`
+
+Read-Only:
+
+- `app_id` (String)
+- `created_at` (String)
+- `endpoint` (String)
+- `id` (String)
+- `instance_id` (String)
+- `instance_type` (String)
+- `name` (String)
+- `region` (String)
+- `status` (String)
+- `vm_uuid` (String)
+
+
 
