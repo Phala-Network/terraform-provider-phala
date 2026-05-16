@@ -27,6 +27,7 @@ type cvmAPIResponse struct {
 	ID         json.RawMessage `json:"id"`
 	Name       string          `json:"name"`
 	Status     string          `json:"status"`
+	CreatedAt  string          `json:"created_at"`
 	InProgress bool            `json:"in_progress"`
 	Listed     *bool           `json:"listed"`
 	AppID      string          `json:"app_id"`

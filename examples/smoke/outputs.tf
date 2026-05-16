@@ -30,6 +30,18 @@ output "app_cvm_ids" {
   value = var.create_resources ? phala_app.smoke[0].cvm_ids : null
 }
 
+output "app_instances" {
+  value = var.create_resources ? phala_app.smoke[0].instances : null
+}
+
+output "app_instance_vm_uuids" {
+  value = var.create_resources ? [for instance in phala_app.smoke[0].instances : instance.vm_uuid] : null
+}
+
+output "app_instance_ids" {
+  value = var.create_resources ? [for instance in phala_app.smoke[0].instances : instance.instance_id] : null
+}
+
 output "consumer_app_id" {
   value = var.create_resources && var.create_consumer_app ? phala_app.consumer[0].app_id : null
 }

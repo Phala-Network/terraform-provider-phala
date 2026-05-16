@@ -206,6 +206,81 @@ func TestAppResourcePopulateStatePreservesReplicaDerivedFieldsWithoutFreshCVMs(t
 	}
 }
 
+func TestAppResourcePopulateStateBuildsComputedInstances(t *testing.T) {
+	ctx := context.Background()
+	state := appResourceModel{
+		ID:            types.StringValue("app_test"),
+		AppID:         types.StringValue("app_test"),
+		Replicas:      types.Int64Null(),
+		DockerCompose: types.StringValue("services:\n  app:\n"),
+	}
+	app := &appAPIResponse{
+		AppID: "app_test",
+		Name:  "demo",
+	}
+	cvms := []cvmAPIResponse{
+		{
+			VMUUID:       "vm-b",
+			InstanceID:   "inst-b",
+			AppID:        "app_test",
+			Name:         "demo-b",
+			Status:       "running",
+			CreatedAt:    "2026-05-02T11:00:00Z",
+			InstanceType: "tdx.small",
+			NodeInfo: &struct {
+				Region string `json:"region"`
+			}{Region: "us-west-1"},
+			Endpoints: []struct {
+				App string `json:"app"`
+			}{{App: "https://b.example"}},
+		},
+		{
+			VMUUID:       "vm-a",
+			InstanceID:   "inst-a",
+			AppID:        "app_test",
+			Name:         "demo-a",
+			Status:       "running",
+			CreatedAt:    "2026-05-02T10:00:00Z",
+			InstanceType: "tdx.small",
+			NodeInfo: &struct {
+				Region string `json:"region"`
+			}{Region: "us-west-1"},
+			Endpoints: []struct {
+				App string `json:"app"`
+			}{{App: "https://a.example"}},
+		},
+	}
+
+	resource := &appResource{}
+	diags := resource.populateState(ctx, &state, app, cvms)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if state.Instances.IsNull() || state.Instances.IsUnknown() {
+		t.Fatalf("expected concrete instances list, got %#v", state.Instances)
+	}
+	var instances []appInstanceModel
+	diags = state.Instances.ElementsAs(ctx, &instances, false)
+	if diags.HasError() {
+		t.Fatalf("decode instances: %v", diags)
+	}
+	if len(instances) != 2 {
+		t.Fatalf("expected 2 instances, got %d", len(instances))
+	}
+	if got := instances[0].VMUUID.ValueString(); got != "vm-a" {
+		t.Fatalf("expected instances sorted by created_at, got first vm_uuid %q", got)
+	}
+	if got := instances[0].InstanceID.ValueString(); got != "inst-a" {
+		t.Fatalf("unexpected first instance_id: %q", got)
+	}
+	if got := instances[0].Endpoint.ValueString(); got != "https://a.example" {
+		t.Fatalf("unexpected first endpoint: %q", got)
+	}
+	if got := instances[1].VMUUID.ValueString(); got != "vm-b" {
+		t.Fatalf("unexpected second vm_uuid: %q", got)
+	}
+}
+
 func TestAppResourceWaitForAppReadyFailsFastOnStoppedReplica(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
