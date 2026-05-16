@@ -284,7 +284,23 @@ func envUpdateAppObjectType() tftypes.Object {
 		"status":               tftypes.String,
 		"primary_cvm_id":       tftypes.String,
 		"cvm_ids":              tftypes.List{ElementType: tftypes.String},
+		"instances":            tftypes.List{ElementType: envUpdateInstanceObjectType()},
 		"endpoint":             tftypes.String,
+	}}
+}
+
+func envUpdateInstanceObjectType() tftypes.Object {
+	return tftypes.Object{AttributeTypes: map[string]tftypes.Type{
+		"id":            tftypes.String,
+		"app_id":        tftypes.String,
+		"name":          tftypes.String,
+		"vm_uuid":       tftypes.String,
+		"instance_id":   tftypes.String,
+		"status":        tftypes.String,
+		"region":        tftypes.String,
+		"instance_type": tftypes.String,
+		"endpoint":      tftypes.String,
+		"created_at":    tftypes.String,
 	}}
 }
 
@@ -327,6 +343,7 @@ func envUpdateConfigValue(t *testing.T, imageVal string) tftypes.Value {
 		"status":               tftypes.NewValue(tftypes.String, nil),
 		"primary_cvm_id":       tftypes.NewValue(tftypes.String, nil),
 		"cvm_ids":              tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, nil),
+		"instances":            tftypes.NewValue(tftypes.List{ElementType: envUpdateInstanceObjectType()}, nil),
 		"endpoint":             tftypes.NewValue(tftypes.String, nil),
 	})
 }
@@ -370,6 +387,7 @@ func envUpdateProposedCreate(t *testing.T, imageVal string) tftypes.Value {
 		"status":               tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
 		"primary_cvm_id":       tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
 		"cvm_ids":              tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, tftypes.UnknownValue),
+		"instances":            tftypes.NewValue(tftypes.List{ElementType: envUpdateInstanceObjectType()}, tftypes.UnknownValue),
 		"endpoint":             tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
 	})
 }
