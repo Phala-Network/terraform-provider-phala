@@ -4,6 +4,17 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0-beta.4] - 2026-05-17
+
+### Added
+
+- New `phala_app_preflight` resource and `phala_app_preflight` data source for computing Phala Cloud app preflight metadata, including `compose_hash`, without deploying an app.
+- `phala_app.instances` now exposes per-instance app state so multi-replica apps can report individual CVM IDs, VM UUIDs, endpoints, regions, instance types, and statuses.
+
+### Changed
+
+- `phala_app.compose_hash` now refreshes from the same app definition used by preflight so deployed app state can be compared directly with preflight output.
+
 ## [0.2.0-beta.3] - 2026-05-03
 
 ### Fixed

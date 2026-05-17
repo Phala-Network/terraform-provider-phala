@@ -1,6 +1,6 @@
 # Terraform Provider Feature Maturity
 
-Last updated: 2026-03-08
+Last updated: 2026-05-17
 
 ## Maturity Levels
 
@@ -13,6 +13,7 @@ Last updated: 2026-03-08
 | Component | Level | Status | Notes |
 | --- | --- | --- | --- |
 | `phala_app` | beta | create/read/update/delete + replica scaling | Sole lifecycle resource: shared app-compose + env with N CVM replicas under one app_id. |
+| resource `phala_app_preflight` | beta | create/read/delete | Computes preflight app metadata, including `compose_hash`, without deploying CVMs. |
 | `phala_cvm_power` | beta | running/stopped state management | Separate action-style power control works; delete is state-only by design. |
 | `phala_ssh_key` | beta | create/read/delete | DO-style key lifecycle. |
 | `phala_account` | beta | read | Returns user/workspace linkage + credits. |
@@ -22,12 +23,15 @@ Last updated: 2026-03-08
 | `phala_images` | beta | read | Catalog data source. |
 | `phala_nodes` | beta | read | Node catalog for placement (`node_id`) with optional region/on-chain-KMS filters. |
 | `phala_attestation` | beta | read | On-demand CVM attestation fetch by `cvm_id` (read-only). |
+| data source `phala_app_preflight` | beta | read | Reads preflight app metadata for a declared app shape without deploying CVMs. |
 
 ## Terraform UX Parity (DigitalOcean-like)
 
 | Capability | Current |
 | --- | --- |
 | App-first resource + replica scaling | yes (`phala_app.replicas`) |
+| Per-instance app state | yes (`phala_app.instances`) |
+| Pre-deploy compose hash / app metadata | yes (`phala_app_preflight`) |
 | Separate power resource (`phala_cvm_power`) | yes |
 | Per-deploy SSH key injection | yes |
 | OS image selection + update | yes (`image`, in-place via `/os-image`) |
