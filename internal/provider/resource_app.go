@@ -1063,7 +1063,18 @@ func (r *appResource) populateState(
 		// Async create/update can temporarily return no replicas immediately after submit.
 		replicaCount = int(state.Replicas.ValueInt64())
 	}
-	state.Replicas = types.Int64Value(int64(replicaCount))
+	members, memberDiags := listValueAsStrings(ctx, state.Members, "members")
+	diags.Append(memberDiags...)
+	if len(members) > 0 {
+		// In named-slot mode, phala_app.replicas is intentionally not the
+		// physical CVM count. phala_app owns only the bootstrap CVM and
+		// phala_app_instance resources own the additional named slots.
+		if state.Replicas.IsNull() || state.Replicas.IsUnknown() || state.Replicas.ValueInt64() < 1 {
+			state.Replicas = types.Int64Value(1)
+		}
+	} else {
+		state.Replicas = types.Int64Value(int64(replicaCount))
+	}
 	listValue, listDiags := types.ListValueFrom(ctx, types.StringType, replicaIDs)
 	diags.Append(listDiags...)
 	if !diags.HasError() {

@@ -118,6 +118,7 @@ func sharedCVMSchemaAttrs() map[string]schema.Attribute {
 			Computed:            true,
 			MarkdownDescription: "Storage filesystem for deployment (`zfs` or `ext4`). Immutable after initial deployment.",
 			PlanModifiers: []planmodifier.String{
+				stringplanmodifier.UseStateForUnknown(),
 				stringplanmodifier.RequiresReplace(),
 			},
 		},

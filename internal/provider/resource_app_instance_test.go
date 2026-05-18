@@ -95,20 +95,24 @@ func TestMergeCVMResponseFillsEmptyFields(t *testing.T) {
 	}
 }
 
-func TestMergeCVMResponsePreservesBaseValues(t *testing.T) {
+func TestMergeCVMResponsePreservesStableBaseValuesAndRefreshesStatus(t *testing.T) {
 	base := cvmAPIResponse{
 		VMUUID: "vm-aaa",
 		Name:   "consul-0",
-		Status: "running",
+		Status: "starting",
 	}
 	extra := cvmAPIResponse{
-		VMUUID: "vm-aaa",
-		Name:   "should-not-overwrite",
-		Status: "stopped",
+		VMUUID:     "vm-aaa",
+		Name:       "should-not-overwrite",
+		Status:     "running",
+		InProgress: false,
 	}
 	merged := mergeCVMResponse(base, extra)
-	if merged.Name != "consul-0" || merged.Status != "running" {
-		t.Fatalf("merge clobbered populated base fields: %#v", merged)
+	if merged.Name != "consul-0" {
+		t.Fatalf("merge clobbered stable base fields: %#v", merged)
+	}
+	if merged.Status != "running" || merged.InProgress {
+		t.Fatalf("merge should use latest readiness fields from extra: %#v", merged)
 	}
 }
 
@@ -247,6 +251,9 @@ func TestAppInstanceCreatePostsNameAndPollsForReady(t *testing.T) {
 	populateAppInstanceState(&state, appID, name, merged)
 	if state.ID.ValueString() != "app_test:consul-1" {
 		t.Fatalf("unexpected ID: %q", state.ID.ValueString())
+	}
+	if state.Status.ValueString() != "running" {
+		t.Fatalf("expected populated status to use waited ready state, got %q", state.Status.ValueString())
 	}
 }
 

@@ -589,9 +589,11 @@ func mergeCVMResponse(base, extra cvmAPIResponse) cvmAPIResponse {
 	if base.Name == "" {
 		base.Name = extra.Name
 	}
-	if base.Status == "" {
+	if extra.Status != "" {
 		base.Status = extra.Status
 	}
+	base.InProgress = extra.InProgress
+	base.Progress = extra.Progress
 	if base.AppID == "" {
 		base.AppID = extra.AppID
 	}

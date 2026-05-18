@@ -281,6 +281,50 @@ func TestAppResourcePopulateStateBuildsComputedInstances(t *testing.T) {
 	}
 }
 
+func TestAppResourcePopulateStateKeepsReplicaCountInMemberMode(t *testing.T) {
+	ctx := context.Background()
+	members, memberDiags := types.ListValueFrom(ctx, types.StringType, []string{"consul-0", "consul-1"})
+	if memberDiags.HasError() {
+		t.Fatalf("build members: %v", memberDiags)
+	}
+
+	state := appResourceModel{
+		ID:            types.StringValue("app_test"),
+		AppID:         types.StringValue("app_test"),
+		Replicas:      types.Int64Value(1),
+		Members:       members,
+		DockerCompose: types.StringValue("services:\n  app:\n"),
+	}
+	app := &appAPIResponse{
+		AppID: "app_test",
+		Name:  "consul-0",
+	}
+	cvms := []cvmAPIResponse{
+		{VMUUID: "vm-a", AppID: "app_test", Name: "consul-0", Status: "running"},
+		{VMUUID: "vm-b", AppID: "app_test", Name: "consul-1", Status: "running"},
+	}
+
+	resource := &appResource{}
+	diags := resource.populateState(ctx, &state, app, cvms)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if state.Replicas.ValueInt64() != 1 {
+		t.Fatalf("member mode should keep legacy replicas at 1, got %#v", state.Replicas)
+	}
+	if state.CVMIDs.IsNull() || state.CVMIDs.IsUnknown() {
+		t.Fatalf("cvm_ids should still reflect physical replicas, got %#v", state.CVMIDs)
+	}
+	var ids []string
+	diags = state.CVMIDs.ElementsAs(ctx, &ids, false)
+	if diags.HasError() {
+		t.Fatalf("decode cvm ids: %v", diags)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 physical CVM ids, got %#v", ids)
+	}
+}
+
 func TestAppResourceWaitForAppReadyFailsFastOnStoppedReplica(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
