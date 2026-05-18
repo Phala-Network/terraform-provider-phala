@@ -278,7 +278,6 @@ func envUpdateAppObjectType() tftypes.Object {
 		"env_compose_hash":     tftypes.String,
 		"env_transaction_hash": tftypes.String,
 		"listed":               tftypes.Bool,
-		"replicas":             tftypes.Number,
 		"wait_for_ready":       tftypes.Bool,
 		"wait_timeout_seconds": tftypes.Number,
 		"status":               tftypes.String,
@@ -286,6 +285,7 @@ func envUpdateAppObjectType() tftypes.Object {
 		"cvm_ids":              tftypes.List{ElementType: tftypes.String},
 		"instances":            tftypes.List{ElementType: envUpdateInstanceObjectType()},
 		"endpoint":             tftypes.String,
+		"members":              tftypes.List{ElementType: tftypes.String},
 	}}
 }
 
@@ -337,7 +337,6 @@ func envUpdateConfigValue(t *testing.T, imageVal string) tftypes.Value {
 		"env_compose_hash":     tftypes.NewValue(tftypes.String, nil),
 		"env_transaction_hash": tftypes.NewValue(tftypes.String, nil),
 		"listed":               tftypes.NewValue(tftypes.Bool, nil),
-		"replicas":             tftypes.NewValue(tftypes.Number, 1),
 		"wait_for_ready":       tftypes.NewValue(tftypes.Bool, false),
 		"wait_timeout_seconds": tftypes.NewValue(tftypes.Number, 600),
 		"status":               tftypes.NewValue(tftypes.String, nil),
@@ -345,6 +344,7 @@ func envUpdateConfigValue(t *testing.T, imageVal string) tftypes.Value {
 		"cvm_ids":              tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, nil),
 		"instances":            tftypes.NewValue(tftypes.List{ElementType: envUpdateInstanceObjectType()}, nil),
 		"endpoint":             tftypes.NewValue(tftypes.String, nil),
+		"members":              tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, nil),
 	})
 }
 
@@ -381,7 +381,6 @@ func envUpdateProposedCreate(t *testing.T, imageVal string) tftypes.Value {
 		"env_compose_hash":     tftypes.NewValue(tftypes.String, nil),
 		"env_transaction_hash": tftypes.NewValue(tftypes.String, nil),
 		"listed":               tftypes.NewValue(tftypes.Bool, tftypes.UnknownValue),
-		"replicas":             tftypes.NewValue(tftypes.Number, 1),
 		"wait_for_ready":       tftypes.NewValue(tftypes.Bool, false),
 		"wait_timeout_seconds": tftypes.NewValue(tftypes.Number, 600),
 		"status":               tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
@@ -389,5 +388,6 @@ func envUpdateProposedCreate(t *testing.T, imageVal string) tftypes.Value {
 		"cvm_ids":              tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, tftypes.UnknownValue),
 		"instances":            tftypes.NewValue(tftypes.List{ElementType: envUpdateInstanceObjectType()}, tftypes.UnknownValue),
 		"endpoint":             tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
+		"members":              tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, nil),
 	})
 }

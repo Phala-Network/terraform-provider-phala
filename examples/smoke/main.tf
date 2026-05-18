@@ -43,7 +43,6 @@ resource "phala_app" "smoke" {
   ssh_authorized_keys = var.cvm_ssh_authorized_keys
   env                 = var.app_env
   docker_compose      = var.docker_compose
-  replicas            = var.app_replicas
 
   wait_for_ready       = var.wait_for_ready
   wait_timeout_seconds = var.wait_timeout_seconds
@@ -65,7 +64,6 @@ resource "phala_app" "consumer" {
     }
   )
   docker_compose = var.consumer_app_docker_compose
-  replicas       = var.consumer_app_replicas
 
   wait_for_ready       = var.wait_for_ready
   wait_timeout_seconds = var.wait_timeout_seconds

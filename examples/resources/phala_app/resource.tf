@@ -4,7 +4,6 @@ resource "phala_app" "web" {
   region    = "US-WEST-1"
   image     = "dstack-dev-0.5.7-9b6a5239"
   disk_size = 40
-  replicas  = 2
 
   env = {
     APP_SECRET = "replace-me"

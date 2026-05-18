@@ -25,12 +25,6 @@ variable "app_name" {
   default = "tf-smoke-app"
 }
 
-variable "app_replicas" {
-  type        = number
-  default     = 1
-  description = "Desired replica count for phala_app smoke resource."
-}
-
 variable "create_consumer_app" {
   type        = bool
   default     = false
@@ -42,11 +36,6 @@ variable "consumer_app_name" {
   default = "tf-smoke-consumer"
 }
 
-variable "consumer_app_replicas" {
-  type        = number
-  default     = 1
-  description = "Desired replica count for the consumer app."
-}
 
 variable "cvm_ssh_authorized_keys" {
   type        = list(string)

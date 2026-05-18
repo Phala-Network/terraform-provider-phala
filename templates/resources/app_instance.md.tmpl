@@ -1,0 +1,98 @@
+---
+page_title: "{{ .Name }} Resource - {{ .ProviderShortName }}"
+subcategory: ""
+description: |-
+  {{ .Description }}
+---
+
+# {{ .Name }} ({{ .Type }})
+
+{{ .Description }}
+
+`phala_app_instance` is the per-member primitive for stateful replica sets on
+Phala Cloud. It binds a Terraform resource to a stable **slot name** under an
+existing `phala_app`. The cloud API guarantees that the slot name is unique
+within the workspace and immutable on the CVM occupying it, so the slot can
+be used as a durable logical-member identity (e.g. `consul-0`, `worker-3`)
+even when the underlying CVM is replaced.
+
+| Concept     | Mapping                                                        |
+|-------------|-----------------------------------------------------------------|
+| `app_id`    | replica set / application                                       |
+| `name`      | logical member key, operator-chosen, immutable (forces replace) |
+| `vm_uuid`   | current concrete CVM occupying the slot                         |
+| `instance_id` | runtime/network/workload identity                             |
+
+## MIG-style usage
+
+For a stateful replica set with N named members, declare `phala_app` with
+the first slot's `name` and `phala_app_instance` with `for_each` over **all**
+slot names — including the first. The instance whose name matches the
+parent `phala_app.name` adopts the bootstrap CVM that `phala_app` provisions;
+the rest are created via `POST /apps/{app_id}/instances`. This keeps the HCL
+symmetric (one `for_each` block covers every member) and avoids any rename
+or stub-CVM hackery.
+
+## Example Usage
+
+{{ tffile "examples/resources/phala_app_instance/resource.tf" }}
+
+## Adoption vs creation (`managed`)
+
+- **Adopted** (`managed = false`): the named CVM already existed under the
+  app when this resource was created. The provider just records the binding
+  in Terraform state. This is the case for the `phala_app_instance` whose
+  name equals `phala_app.name` — `phala_app` provisioned that CVM and owns
+  its lifecycle. Destroying this resource only drops the binding; the CVM
+  stays alive until `phala_app` is destroyed. Set any bootstrap-slot env on
+  `phala_app.env`; `phala_app_instance.env` is rejected for adopted slots
+  because the provider cannot safely mutate a CVM owned by the parent resource.
+- **Managed** (`managed = true`): the provider created the CVM via
+  `POST /apps/{app_id}/instances`. Destroying this resource deletes the CVM
+  on the cloud. `env` can be set on managed slots to inject per-slot values
+  such as `CVM_SLOT_NAME`; values are encrypted with the app env public key
+  before the create request is sent.
+
+`managed` is set at Create time and persists in state. Imported resources
+default to `managed = true`. If you imported the bootstrap CVM and want it
+to behave like an adopted instance, edit the state to set `managed = false`.
+
+## Invariant: `phala_app.name` must be in the slot list
+
+For the adoption to actually save you a CVM, `phala_app.name` must equal one
+of the slot names you declare via `phala_app_instance`. If it doesn't, the
+bootstrap CVM has nothing to adopt it and becomes an unreferenced extra
+under the app — still billed, still managed by `phala_app`, but not visible
+in any `phala_app_instance.*` state.
+
+The cleanest enforcement is to declare the slot list on `phala_app` via the
+[`members`](app.md) attribute. The provider then validates at plan time
+that `phala_app.name` is one of `phala_app.members` and that the legacy
+`replicas` path isn't in use, and the example below derives the
+`phala_app_instance` `for_each` directly from `phala_app.consul.members` so
+the two stay aligned by construction.
+
+## Caveats
+
+- The Terraform ID is `<app_id>:<name>`. Import via
+  `terraform import phala_app_instance.foo app_abcdef...:consul-1`.
+- `name`, `app_id`, and the optional override fields (`node_id`,
+  `docker_compose`, `pre_launch_script`, `env`, `encrypted_env`, `compose_hash`)
+  all force replacement. Compose / env updates that should apply across the
+  whole replica set must go through `phala_app`.
+- `phala_app_instance.env` only supplies encrypted values for the new instance.
+  The env keys must already be allowed by the app compose, usually by declaring
+  the same keys on `phala_app.env` for the bootstrap slot.
+- Do **not** set `phala_app.replicas > 1` while declaring named
+  `phala_app_instance` resources for the same app. The extra anonymous
+  replicas come from the legacy `/cvms/{src}/replicas` endpoint (no naming)
+  and will collide with the named-slot model. Worse, if you later set
+  `replicas = 1` explicitly, `phala_app`'s in-place reconcile will scale
+  the app *down* by deleting CVMs — including ones owned by your
+  `phala_app_instance` resources. Leave `replicas` at its default when
+  using named instances.
+- The on-chain KMS two-phase (prepare/commit) flow that the cloud API exposes
+  via HTTP 465 is not yet wired up here. `phala_app_instance` currently
+  supports only the single-call PHALA KMS flow.
+
+{{ .SchemaMarkdown }}

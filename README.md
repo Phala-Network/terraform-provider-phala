@@ -2,7 +2,7 @@
 
 Deploy confidential apps and CVMs on Phala Cloud with Terraform.
 
-Start with `phala_app`. It deploys one app definition with shared Docker Compose, shared environment, and one or more CVM replicas behind a single app identity. That is the default Phala Cloud workflow this provider is built around.
+Start with `phala_app`. It deploys one CVM under a single app identity with a Docker Compose, optional encrypted environment, OS image, and instance size. That single CVM is the **bootstrap** — every Phala app is born with one. For stateful replica sets (Consul, Patroni, etcd, Kafka, …), pair `phala_app` with `phala_app_instance` resources to declare additional named slots that share the same `app_id`.
 
 This provider is intentionally close to the Terraform ergonomics people expect from providers like DigitalOcean: catalog data sources, declarative compute resources, explicit power control, SSH key resources, and straightforward outputs such as `app_id`, `cvm_ids`, and `endpoint`.
 
@@ -31,7 +31,7 @@ Provider environment variables:
 
 ## Quick Start
 
-This is the default path. It deploys one app with one replica and gives you an `app_id` and public endpoint.
+This is the default path. It deploys one app with one CVM and gives you an `app_id` and public endpoint.
 
 The example below uses concrete defaults:
 
@@ -60,7 +60,6 @@ resource "phala_app" "hello" {
   region    = "US-WEST-1"
   image     = "dstack-dev-0.5.7-9b6a5239" # use a full image slug from data.phala_images
   disk_size = 40 # GB
-  replicas  = 1
 
   docker_compose = <<-YAML
     services:
@@ -162,7 +161,6 @@ resource "phala_app" "web" {
   name           = "my-phala-web"
   size           = local.chosen_size
   region         = local.chosen_region
-  replicas       = 1
   ssh_authorized_keys = [
     file("~/.ssh/id_ed25519.pub"),
   ]
@@ -190,6 +188,38 @@ resource "phala_cvm_power" "web_power" {
 }
 ```
 
+### Deploy a stateful replica set (MIG-style named slots)
+
+For Consul, Patroni, etcd, or any cluster that needs stable per-member identity, declare `members` on `phala_app` and pair it with `phala_app_instance` resources keyed by name. The bootstrap CVM (created by `phala_app` itself) gets the name in `phala_app.name`; the matching `phala_app_instance` adopts it. The other slots are created via `POST /apps/{app_id}/instances`.
+
+```hcl
+locals {
+  consul_members = ["consul-0", "consul-1", "consul-2"]
+}
+
+resource "phala_app" "consul" {
+  name    = local.consul_members[0]
+  members = local.consul_members
+  size    = data.phala_sizes.all.sizes[0].slug
+  region  = data.phala_regions.all.regions[0].slug
+
+  docker_compose = file("${path.module}/consul-compose.yaml")
+}
+
+resource "phala_app_instance" "consul" {
+  for_each = toset(phala_app.consul.members)
+
+  app_id = phala_app.consul.app_id
+  name   = each.value
+}
+
+output "consul_member_uuids" {
+  value = { for k, v in phala_app_instance.consul : k => v.vm_uuid }
+}
+```
+
+The slot identity (`name`) is durable: if the cloud replaces the CVM occupying a slot, the next refresh rebinds `vm_uuid` while the Terraform resource key stays the same. App-level updates to `docker_compose`/`env`/`image` are blocked at plan time in members mode — destroy and recreate the app to roll new compose across slots.
+
 ### Deploy one app and wire its outputs into another app
 
 ```hcl
@@ -197,7 +227,6 @@ resource "phala_app" "api" {
   name           = "api-app"
   size           = data.phala_sizes.all.sizes[0].slug
   region         = data.phala_regions.all.regions[0].slug
-  replicas       = 2
   docker_compose = <<-YAML
     services:
       api:
@@ -211,7 +240,6 @@ resource "phala_app" "consumer" {
   name           = "consumer-app"
   size           = data.phala_sizes.all.sizes[0].slug
   region         = data.phala_regions.all.regions[0].slug
-  replicas       = 1
   docker_compose = <<-YAML
     services:
       app:
@@ -314,15 +342,14 @@ Notes:
 
 ### `phala_app`
 
-- `phala_app` is the sole lifecycle resource. It manages one app identity with one or more CVM replicas.
-- Create flow follows Phala's two-step API: `POST /cvms/provision` then `POST /cvms`.
-- Replica management: set `replicas` to scale horizontally. All replicas share the same compose, env, and settings.
-- Key outputs: `app_id`, `primary_cvm_id`, `cvm_ids`, `endpoint`.
+- `phala_app` is the app + bootstrap CVM. Each app is born with exactly one CVM via Phala's two-step API: `POST /cvms/provision` then `POST /cvms`.
+- For stateful replica sets, declare `members = [<slot names>]` on `phala_app` and pair with `phala_app_instance` resources keyed by name. See [Deploy a stateful replica set](#deploy-a-stateful-replica-set-mig-style-named-slots).
+- Key outputs: `app_id`, `primary_cvm_id` (the bootstrap CVM), `cvm_ids` (every CVM under the app), `endpoint`.
 - Create-time identity/placement fields:
   - `kms` (currently `phala` only; `ethereum`/`base` planned)
   - `custom_app_id` + `nonce` (deterministic identity flow for PHALA KMS)
   - `node_id` (maps to provision `teepod_id`; discover via `data.phala_nodes`)
-- In-place updates: size, disk, OS image, docker compose, pre-launch script, encrypted env, replicas.
+- In-place updates on the bootstrap CVM: size, disk, OS image, docker compose, pre-launch script, encrypted env. In members mode these app-level updates are blocked at plan time (they only mutate the bootstrap CVM, not the named slots) — destroy and recreate to roll new compose across the set.
 - Compose-file runtime settings are exposed as first-class attributes:
   - `public_logs`
   - `public_sysinfo`
