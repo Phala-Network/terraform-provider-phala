@@ -42,6 +42,6 @@ Adding or removing entries from `members` is still safe (it just spawns or destr
 
 ## Migration from 0.2.x
 
-The `replicas` attribute was removed in 0.3.0. Any HCL setting `replicas` will fail validation. To migrate a multi-replica 0.2.x app, declare the slot names in `members` and add a `phala_app_instance` `for_each` over them. See [CHANGELOG](../../CHANGELOG.md#030---2026-05-18) for the recipe.
+The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas` will fail validation. To migrate a multi-replica 0.2.x app, declare the slot names in `members` and add a `phala_app_instance` `for_each` over them. See [CHANGELOG](../../CHANGELOG.md#030-beta1---2026-05-18) for the recipe.
 
 {{ .SchemaMarkdown }}

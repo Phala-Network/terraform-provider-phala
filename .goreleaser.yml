@@ -45,6 +45,9 @@ signs:
       - "${artifact}"
 
 release:
+  # Mark `vX.Y.Z-<suffix>` (e.g. -beta.1, -rc.2) as a GitHub pre-release so it
+  # is not auto-promoted to "Latest." Stable `vX.Y.Z` tags publish normally.
+  prerelease: auto
   extra_files:
     - glob: "terraform-registry-manifest.json"
       name_template: "{{ .ProjectName }}_{{ .Version }}_manifest.json"

@@ -12,7 +12,7 @@ Last updated: 2026-05-18
 
 | Component | Level | Status | Notes |
 | --- | --- | --- | --- |
-| `phala_app` | beta | create/read/update/delete + bootstrap CVM | App identity + one bootstrap CVM (single-CVM apps), or app identity + per-slot CVMs via `phala_app_instance` (MIG). The legacy anonymous `replicas` field was removed in 0.3.0. |
+| `phala_app` | beta | create/read/update/delete + bootstrap CVM | App identity + one bootstrap CVM (single-CVM apps), or app identity + per-slot CVMs via `phala_app_instance` (MIG). The legacy anonymous `replicas` field was removed in 0.3.0-beta.1. |
 | `phala_app_instance` | beta | create/read/delete + adopt-by-name | Stable named slot under an app, keyed by `(app_id, name)`. Adopts the bootstrap CVM when its name matches `phala_app.name`. |
 | resource `phala_app_preflight` | beta | create/read/delete | Computes preflight app metadata, including `compose_hash`, without deploying CVMs. |
 | `phala_cvm_power` | beta | running/stopped state management | Separate action-style power control works; delete is state-only by design. |

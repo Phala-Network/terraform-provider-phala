@@ -4,21 +4,23 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-05-18
+## [0.3.0-beta.1] - 2026-05-18
 
-This is a breaking release. The provider's model collapses to:
+First prerelease of the 0.3 line. The provider's model collapses to:
 
 - `phala_app` = app identity + exactly one **bootstrap** CVM.
 - `phala_app_instance` (new in 0.3) = additional named slots under the same app, declared explicitly.
 
-The legacy anonymous-replicas mode (`phala_app.replicas = N > 1` + `/cvms/{src}/replicas` fan-out) is gone. Every multi-CVM use case now goes through `phala_app_instance` with `phala_app.members`.
+The legacy anonymous-replicas mode (`phala_app.replicas = N > 1` + `/cvms/{src}/replicas` fan-out) is gone. Every multi-CVM use case now goes through `phala_app_instance` with `phala_app.members`. This is a **breaking change** — see migration recipe below.
+
+Released as `-beta.1` to validate the new shape against real workloads before promoting to stable. Treat as a candidate for stateful-cluster integrations; do not pin production single-CVM stacks to this tag without re-testing the simpler in-place update path.
 
 ### Breaking changes
 
 - **Removed `phala_app.replicas`.** The schema attribute, the `desiredReplicaCount` validator, the `reconcileReplicas` scale-up/scale-down loop, the per-CVM PATCH fan-out helpers, and the `/apps/{id}/cvms/{src}/replicas` API call site are all removed. Any HCL that sets `replicas` will fail validation; any prior state will refresh cleanly because `replicas` is no longer persisted.
 - **Removed the `/apps/{id}/cvms/{src}/replicas` code path.** The cloud endpoint still exists; the provider just doesn't call it.
 
-### Migration recipe (0.2.x → 0.3.0)
+### Migration recipe (0.2.x → 0.3.0-beta.1)
 
 Before (0.2.x):
 
@@ -31,7 +33,7 @@ resource "phala_app" "web" {
 }
 ```
 
-After (0.3.0):
+After (0.3.0-beta.1):
 
 ```hcl
 locals {
