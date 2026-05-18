@@ -2,6 +2,12 @@ package provider
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -254,6 +260,94 @@ func TestAppInstanceCreatePostsNameAndPollsForReady(t *testing.T) {
 	}
 	if state.Status.ValueString() != "running" {
 		t.Fatalf("expected populated status to use waited ready state, got %q", state.Status.ValueString())
+	}
+}
+
+func TestAppInstanceAutoEnvEncryptsCreatePayload(t *testing.T) {
+	curve := ecdh.X25519()
+	receiverPriv, err := curve.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate receiver key: %v", err)
+	}
+	pubkeyB64 := base64.StdEncoding.EncodeToString(receiverPriv.PublicKey().Bytes())
+
+	var capturedBody atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/apps/test/cvms":
+			writeJSON(t, w, http.StatusOK, `[{"vm_uuid":"vm-bootstrap","name":"consul-0","status":"running","app_id":"app_test","kms_info":{"encrypted_env_pubkey":"`+pubkeyB64+`"}}]`)
+			return
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/apps/test/instances":
+			body, _ := io.ReadAll(r.Body)
+			capturedBody.Store(body)
+			writeJSON(t, w, http.StatusOK, `{"vm_uuid":"vm-new","name":"consul-1","status":"running","app_id":"app_test"}`)
+			return
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, "not found")
+		}
+	}))
+	defer srv.Close()
+
+	r := &appInstanceResource{
+		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+	}
+
+	env, diags := types.MapValueFrom(context.Background(), types.StringType, map[string]string{
+		"CVM_SLOT_NAME":  "consul-1",
+		"WORKER_ORDINAL": "1",
+	})
+	if diags.HasError() {
+		t.Fatalf("build env map: %v", diags)
+	}
+	envCfg, parseDiags := parseEnvConfig(
+		context.Background(),
+		env,
+		types.StringNull(),
+		types.ListNull(types.StringType),
+		types.StringNull(),
+		types.StringNull(),
+		true,
+	)
+	if parseDiags.HasError() {
+		t.Fatalf("parse env config: %v", parseDiags)
+	}
+
+	pubkey, err := r.loadAppEnvEncryptionPubkey(context.Background(), "app_test")
+	if err != nil {
+		t.Fatalf("load app env encryption pubkey: %v", err)
+	}
+	if pubkey != pubkeyB64 {
+		t.Fatalf("unexpected pubkey: %q", pubkey)
+	}
+	if err := envCfg.encryptAutoEnv(pubkey); err != nil {
+		t.Fatalf("encrypt auto env: %v", err)
+	}
+
+	body := createAppInstanceRequest{Name: "consul-1"}
+	if envCfg.HasEffectiveEncrypted {
+		body.EncryptedEnv = &envCfg.EffectiveEncrypted
+	}
+	var created cvmAPIResponse
+	if err := r.client.PostJSON(context.Background(), appPath("app_test")+"/instances", body, &created); err != nil {
+		t.Fatalf("create POST failed: %v", err)
+	}
+
+	raw := capturedBody.Load().([]byte)
+	var got createAppInstanceRequest
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode posted body: %v", err)
+	}
+	if got.EncryptedEnv == nil || *got.EncryptedEnv == "" {
+		t.Fatalf("expected encrypted_env in create payload: %#v", got)
+	}
+
+	gotEnv := decryptEnvPacketForTest(t, receiverPriv, *got.EncryptedEnv)
+	if gotEnv["CVM_SLOT_NAME"] != "consul-1" {
+		t.Fatalf("unexpected CVM_SLOT_NAME: %q", gotEnv["CVM_SLOT_NAME"])
+	}
+	if gotEnv["WORKER_ORDINAL"] != "1" {
+		t.Fatalf("unexpected WORKER_ORDINAL: %q", gotEnv["WORKER_ORDINAL"])
 	}
 }
 
@@ -529,4 +623,54 @@ func TestAppInstanceDeleteCallsCloudWhenManaged(t *testing.T) {
 	if got, _ := deletedPath.Load().(string); got != "/api/v1/cvms/vm-created" {
 		t.Fatalf("expected DELETE /cvms/vm-created, got %q", got)
 	}
+}
+
+func decryptEnvPacketForTest(t *testing.T, receiverPriv *ecdh.PrivateKey, encryptedHex string) map[string]string {
+	t.Helper()
+
+	packet, err := hex.DecodeString(encryptedHex)
+	if err != nil {
+		t.Fatalf("decode encrypted hex: %v", err)
+	}
+	if len(packet) < 61 {
+		t.Fatalf("encrypted packet too short: %d", len(packet))
+	}
+
+	curve := ecdh.X25519()
+	ephemeralPub, err := curve.NewPublicKey(packet[:32])
+	if err != nil {
+		t.Fatalf("parse ephemeral public key: %v", err)
+	}
+	sharedSecret, err := receiverPriv.ECDH(ephemeralPub)
+	if err != nil {
+		t.Fatalf("derive shared secret: %v", err)
+	}
+
+	block, err := aes.NewCipher(sharedSecret[:32])
+	if err != nil {
+		t.Fatalf("create AES cipher: %v", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("create AES-GCM: %v", err)
+	}
+	plaintext, err := aead.Open(nil, packet[32:44], packet[44:], nil)
+	if err != nil {
+		t.Fatalf("decrypt payload: %v", err)
+	}
+
+	var payload struct {
+		Env []struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		} `json:"env"`
+	}
+	if err := json.Unmarshal(plaintext, &payload); err != nil {
+		t.Fatalf("unmarshal decrypted JSON: %v", err)
+	}
+	out := make(map[string]string, len(payload.Env))
+	for _, item := range payload.Env {
+		out[item.Key] = item.Value
+	}
+	return out
 }

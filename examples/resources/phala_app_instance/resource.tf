@@ -23,6 +23,13 @@ resource "phala_app" "consul" {
 
   docker_compose = file("${path.module}/consul-compose.yaml")
 
+  # The bootstrap CVM is owned by phala_app, so its per-slot env is declared here.
+  # This also adds CVM_SLOT_NAME to the app compose allowed_envs list, letting
+  # managed phala_app_instance slots override it with their own encrypted values.
+  env = {
+    CVM_SLOT_NAME = "consul-0"
+  }
+
   wait_for_ready       = true
   wait_timeout_seconds = 900
 }
@@ -32,6 +39,13 @@ resource "phala_app_instance" "consul" {
 
   app_id = phala_app.consul.app_id
   name   = each.value
+
+  # The bootstrap slot ("consul-0") is adopted from phala_app and cannot be
+  # mutated here. Extra slots are created by phala_app_instance and receive
+  # their own encrypted per-slot env at create time.
+  env = each.value == phala_app.consul.name ? null : {
+    CVM_SLOT_NAME = each.value
+  }
 
   wait_for_ready       = true
   wait_timeout_seconds = 900

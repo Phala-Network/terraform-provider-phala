@@ -44,10 +44,14 @@ or stub-CVM hackery.
   in Terraform state. This is the case for the `phala_app_instance` whose
   name equals `phala_app.name` — `phala_app` provisioned that CVM and owns
   its lifecycle. Destroying this resource only drops the binding; the CVM
-  stays alive until `phala_app` is destroyed.
+  stays alive until `phala_app` is destroyed. Set any bootstrap-slot env on
+  `phala_app.env`; `phala_app_instance.env` is rejected for adopted slots
+  because the provider cannot safely mutate a CVM owned by the parent resource.
 - **Managed** (`managed = true`): the provider created the CVM via
   `POST /apps/{app_id}/instances`. Destroying this resource deletes the CVM
-  on the cloud.
+  on the cloud. `env` can be set on managed slots to inject per-slot values
+  such as `CVM_SLOT_NAME`; values are encrypted with the app env public key
+  before the create request is sent.
 
 `managed` is set at Create time and persists in state. Imported resources
 default to `managed = true`. If you imported the bootstrap CVM and want it
@@ -73,9 +77,12 @@ the two stay aligned by construction.
 - The Terraform ID is `<app_id>:<name>`. Import via
   `terraform import phala_app_instance.foo app_abcdef...:consul-1`.
 - `name`, `app_id`, and the optional override fields (`node_id`,
-  `docker_compose`, `pre_launch_script`, `encrypted_env`, `compose_hash`)
+  `docker_compose`, `pre_launch_script`, `env`, `encrypted_env`, `compose_hash`)
   all force replacement. Compose / env updates that should apply across the
   whole replica set must go through `phala_app`.
+- `phala_app_instance.env` only supplies encrypted values for the new instance.
+  The env keys must already be allowed by the app compose, usually by declaring
+  the same keys on `phala_app.env` for the bootstrap slot.
 - Do **not** set `phala_app.replicas > 1` while declaring named
   `phala_app_instance` resources for the same app. The extra anonymous
   replicas come from the legacy `/cvms/{src}/replicas` endpoint (no naming)

@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -39,6 +40,7 @@ type appInstanceResourceModel struct {
 	NodeID            types.Int64  `tfsdk:"node_id"`
 	DockerCompose     types.String `tfsdk:"docker_compose"`
 	PreLaunchScript   types.String `tfsdk:"pre_launch_script"`
+	Env               types.Map    `tfsdk:"env"`
 	EncryptedEnv      types.String `tfsdk:"encrypted_env"`
 	ComposeHash       types.String `tfsdk:"compose_hash"`
 	WaitForReady      types.Bool   `tfsdk:"wait_for_ready"`
@@ -111,6 +113,17 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 				MarkdownDescription: "Optional pre-launch script content. Changing forces replacement.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"env": schema.MapAttribute{
+				Optional:    true,
+				Sensitive:   true,
+				ElementType: types.StringType,
+				MarkdownDescription: "Plaintext env vars for this instance. Values are encrypted before API submission, " +
+					"but plaintext is stored in Terraform state. Changing forces replacement. The parent app compose " +
+					"must already allow these env keys.",
+				PlanModifiers: []planmodifier.Map{
+					mapplanmodifier.RequiresReplace(),
 				},
 			},
 			"encrypted_env": schema.StringAttribute{
@@ -257,6 +270,20 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
+	envCfg, envDiags := parseEnvConfig(
+		ctx,
+		plan.Env,
+		plan.EncryptedEnv,
+		types.ListNull(types.StringType),
+		types.StringNull(),
+		types.StringNull(),
+		true,
+	)
+	resp.Diagnostics.Append(envDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	timeout := waitTimeout(plan.WaitTimeoutSecond)
 	deadline := time.Now().Add(timeout)
 
@@ -268,6 +295,22 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 		resp.Diagnostics.AddError("Failed to look up existing app instance", err.Error())
 		return
 	} else if ok {
+		if envCfg.HasAutoEnv {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("env"),
+				"Cannot apply per-instance env to adopted instance",
+				"This phala_app_instance matched an existing CVM owned by phala_app. Set env on the parent phala_app for the bootstrap slot; use phala_app_instance.env only for CVMs created by phala_app_instance.",
+			)
+			return
+		}
+		if envCfg.HasManualEncrypted {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("encrypted_env"),
+				"Cannot apply per-instance encrypted_env to adopted instance",
+				"This phala_app_instance matched an existing CVM owned by phala_app. Set encrypted_env on the parent phala_app for the bootstrap slot; use phala_app_instance.encrypted_env only for CVMs created by phala_app_instance.",
+			)
+			return
+		}
 		merged := existing
 		if shouldWait(plan.WaitForReady) {
 			ready, err := r.waitForInstanceRunning(ctx, appID, name, deadline)
@@ -300,8 +343,23 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 		v := plan.PreLaunchScript.ValueString()
 		body.PreLaunchScript = &v
 	}
-	if !plan.EncryptedEnv.IsNull() && !plan.EncryptedEnv.IsUnknown() {
-		v := plan.EncryptedEnv.ValueString()
+	if envCfg.HasAutoEnv {
+		pubkey, err := r.loadAppEnvEncryptionPubkey(ctx, appID)
+		if err != nil {
+			resp.Diagnostics.AddError("Failed to load app encryption key", err.Error())
+			return
+		}
+		if pubkey == "" {
+			resp.Diagnostics.AddError("Missing encryption public key", "No CVM under the app returned encrypted_env_pubkey. Use manual encrypted_env mode or wait until the bootstrap CVM exposes the app env encryption key.")
+			return
+		}
+		if err := envCfg.encryptAutoEnv(pubkey); err != nil {
+			resp.Diagnostics.AddError("Failed to encrypt env", err.Error())
+			return
+		}
+	}
+	if envCfg.HasEffectiveEncrypted {
+		v := envCfg.EffectiveEncrypted
 		body.EncryptedEnv = &v
 	}
 	if !plan.ComposeHash.IsNull() && !plan.ComposeHash.IsUnknown() {
@@ -497,6 +555,43 @@ func (r *appInstanceResource) fetchAppCVMs(ctx context.Context, appID string) ([
 		items = append(items, normalizeCVMFromAny(raw))
 	}
 	return normalizeCVMInfos(items), nil
+}
+
+func (r *appInstanceResource) fetchCVM(ctx context.Context, id string) (*cvmAPIResponse, error) {
+	var out cvmAPIResponse
+	if err := r.client.GetJSON(ctx, cvmPath(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (r *appInstanceResource) loadAppEnvEncryptionPubkey(ctx context.Context, appID string) (string, error) {
+	cvms, err := r.fetchAppCVMs(ctx, appID)
+	if err != nil {
+		return "", err
+	}
+	for _, cvm := range cvms {
+		if pubkey := cvm.envEncryptionPubkey(); pubkey != "" {
+			return pubkey, nil
+		}
+	}
+	for _, cvm := range cvms {
+		identifier := selectReplicaIdentifier(cvm)
+		if identifier == "" {
+			continue
+		}
+		detail, err := r.fetchCVM(ctx, identifier)
+		if err != nil {
+			if isNotFound(err) || isRetryable(err) {
+				continue
+			}
+			return "", err
+		}
+		if pubkey := detail.envEncryptionPubkey(); pubkey != "" {
+			return pubkey, nil
+		}
+	}
+	return "", nil
 }
 
 func (r *appInstanceResource) waitForInstance(ctx context.Context, appID, name string, deadline time.Time) (cvmAPIResponse, error) {

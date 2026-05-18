@@ -61,6 +61,13 @@ resource "phala_app" "consul" {
 
   docker_compose = file("${path.module}/consul-compose.yaml")
 
+  # The bootstrap CVM is owned by phala_app, so its per-slot env is declared here.
+  # This also adds CVM_SLOT_NAME to the app compose allowed_envs list, letting
+  # managed phala_app_instance slots override it with their own encrypted values.
+  env = {
+    CVM_SLOT_NAME = "consul-0"
+  }
+
   wait_for_ready       = true
   wait_timeout_seconds = 900
 }
@@ -70,6 +77,13 @@ resource "phala_app_instance" "consul" {
 
   app_id = phala_app.consul.app_id
   name   = each.value
+
+  # The bootstrap slot ("consul-0") is adopted from phala_app and cannot be
+  # mutated here. Extra slots are created by phala_app_instance and receive
+  # their own encrypted per-slot env at create time.
+  env = each.value == phala_app.consul.name ? null : {
+    CVM_SLOT_NAME = each.value
+  }
 
   wait_for_ready       = true
   wait_timeout_seconds = 900
@@ -88,10 +102,14 @@ output "consul_member_uuids" {
   in Terraform state. This is the case for the `phala_app_instance` whose
   name equals `phala_app.name` — `phala_app` provisioned that CVM and owns
   its lifecycle. Destroying this resource only drops the binding; the CVM
-  stays alive until `phala_app` is destroyed.
+  stays alive until `phala_app` is destroyed. Set any bootstrap-slot env on
+  `phala_app.env`; `phala_app_instance.env` is rejected for adopted slots
+  because the provider cannot safely mutate a CVM owned by the parent resource.
 - **Managed** (`managed = true`): the provider created the CVM via
   `POST /apps/{app_id}/instances`. Destroying this resource deletes the CVM
-  on the cloud.
+  on the cloud. `env` can be set on managed slots to inject per-slot values
+  such as `CVM_SLOT_NAME`; values are encrypted with the app env public key
+  before the create request is sent.
 
 `managed` is set at Create time and persists in state. Imported resources
 default to `managed = true`. If you imported the bootstrap CVM and want it
@@ -117,9 +135,12 @@ the two stay aligned by construction.
 - The Terraform ID is `<app_id>:<name>`. Import via
   `terraform import phala_app_instance.foo app_abcdef...:consul-1`.
 - `name`, `app_id`, and the optional override fields (`node_id`,
-  `docker_compose`, `pre_launch_script`, `encrypted_env`, `compose_hash`)
+  `docker_compose`, `pre_launch_script`, `env`, `encrypted_env`, `compose_hash`)
   all force replacement. Compose / env updates that should apply across the
   whole replica set must go through `phala_app`.
+- `phala_app_instance.env` only supplies encrypted values for the new instance.
+  The env keys must already be allowed by the app compose, usually by declaring
+  the same keys on `phala_app.env` for the bootstrap slot.
 - Do **not** set `phala_app.replicas > 1` while declaring named
   `phala_app_instance` resources for the same app. The extra anonymous
   replicas come from the legacy `/cvms/{src}/replicas` endpoint (no naming)
@@ -145,6 +166,7 @@ the two stay aligned by construction.
 - `compose_hash` (String) Optional explicit compose hash. When omitted the backend resolves it from `docker_compose` (if provided) or the app's current revision. Changing forces replacement.
 - `docker_compose` (String) Optional override Docker Compose YAML for this instance. When omitted, the backend uses the app's template instance. Changing forces replacement.
 - `encrypted_env` (String, Sensitive) Optional hex-encoded encrypted env payload to seed at create time.
+- `env` (Map of String, Sensitive) Plaintext env vars for this instance. Values are encrypted before API submission, but plaintext is stored in Terraform state. Changing forces replacement. The parent app compose must already allow these env keys.
 - `node_id` (Number) Optional target node (teepod) ID for placement. Changing this forces replacement.
 - `pre_launch_script` (String) Optional pre-launch script content. Changing forces replacement.
 - `wait_for_ready` (Boolean) Wait until the new instance reports `running` before returning.
