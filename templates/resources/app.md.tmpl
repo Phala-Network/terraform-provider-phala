@@ -32,4 +32,16 @@ When `members` is set, the provider enforces two invariants at plan time:
 
 Downstream `phala_app_instance` resources should set `for_each = toset(phala_app.foo.members)` so the slot list stays a single source of truth.
 
+## In-place updates are blocked in members mode
+
+The cloud's per-CVM PATCH endpoints (`/cvms/{id}/docker-compose`, `/envs`, `/os-image`, `/resources`, `/compose_file/provision`) only target a single CVM, and the legacy app-wide fan-out (`/apps/{id}/cvms/{src}/replicas`) is intentionally disabled in members mode because it would silently delete a named slot. Until the cloud exposes an app-revision-aware update endpoint that preserves named slot identity, this provider refuses at plan time to update any of these `phala_app` fields when `members` is set:
+
+`docker_compose`, `pre_launch_script`, `env`, `encrypted_env`, `env_keys`, `env_compose_hash`, `env_transaction_hash`, `image`, `size`, `disk_size`, `public_logs`, `public_sysinfo`, `public_tcbinfo`, `gateway_enabled`, `secure_time`.
+
+Workarounds:
+1. Destroy the `phala_app` + matching `phala_app_instance` resources and recreate them with the new compose / env / image.
+2. Move per-slot variations to `phala_app_instance.env` (per-slot encrypted env at create time; immutable thereafter).
+
+Adding or removing entries from `members` is still safe (it just spawns or destroys `phala_app_instance` resources). Removing the `members` attribute entirely (transitioning back to anonymous-replicas mode) is **not** safe and is also blocked at plan time — destroy and recreate the app.
+
 {{ .SchemaMarkdown }}

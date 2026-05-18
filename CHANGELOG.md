@@ -11,6 +11,15 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 - New optional `members` list on `phala_app` declares the full slot list for MIG-style usage. When set, the provider validates at plan time that `name` is one of `members` and that `replicas` is unset or 1 — catching the typo and mis-mode footguns. Downstream `phala_app_instance` resources should use `for_each = toset(phala_app.foo.members)` to keep the slot list a single source of truth.
 - Design note `docs/design-notes/cvm-rename-endpoint.md` capturing the verified shape of `PATCH /cvms/{cvm_id}/name` for future reference (recovery tooling, CLI parity).
 
+### Fixed
+
+- `phala_app` no longer silently deletes a named slot CVM on every Update in members mode. The legacy `reconcileReplicas` fan-out (which scales the cloud-side CVM count to match `phala_app.replicas`) is now skipped when `members` is set in either prior state or the new plan — the named slot count is owned by `phala_app_instance` resources, not by `replicas`.
+
+### Changed
+
+- `phala_app` now refuses at plan time to update any cloud-side mutable field (`docker_compose`, `pre_launch_script`, `env`, `encrypted_env`, `env_keys`, `env_compose_hash`, `env_transaction_hash`, `image`, `size`, `disk_size`, `public_logs`, `public_sysinfo`, `public_tcbinfo`, `gateway_enabled`, `secure_time`) when the resource is in members (MIG) mode. The existing per-CVM PATCH endpoints (`/cvms/{id}/docker-compose`, `/envs`, `/os-image`, `/resources`, `/compose_file/provision`) only target one CVM, and the legacy app-wide fan-out is unsafe in members mode (it would silently delete a named slot). Until an app-revision-aware update path lands on the cloud, the safe answer is to refuse the plan rather than half-apply it. Workarounds: destroy + recreate, or move per-slot variations to `phala_app_instance.env`.
+- Removing `members` from a `phala_app` resource that previously had it set is also blocked at plan time (the transition would orphan named slot CVMs and trigger a scale-down on the next reconcile). Destroy and recreate the app instead.
+
 ## [0.2.0-beta.4] - 2026-05-17
 
 ### Added

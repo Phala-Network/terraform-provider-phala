@@ -24,6 +24,7 @@ import (
 var _ resource.Resource = &appResource{}
 var _ resource.ResourceWithImportState = &appResource{}
 var _ resource.ResourceWithValidateConfig = &appResource{}
+var _ resource.ResourceWithModifyPlan = &appResource{}
 
 type appResource struct {
 	client *APIClient
@@ -205,6 +206,123 @@ func (r *appResource) ValidateConfig(ctx context.Context, req resource.ValidateC
 		return
 	}
 	resp.Diagnostics.Append(validateMembersAndName(ctx, cfg)...)
+}
+
+// ModifyPlan blocks mutable cloud-side updates to phala_app in members
+// (MIG) mode. The provider's existing app-update path mutates one CVM at
+// a time, and the legacy fan-out / scale-down logic is intentionally
+// disabled in members mode (it would silently delete a named slot). So
+// until the cloud exposes an app-revision-aware update endpoint that
+// preserves named slot identity, the safe answer is: refuse the plan
+// rather than apply it half-way.
+//
+// We read individual attributes (not the whole struct) so this works on
+// fresh-Create plans too, where Computed nested fields are still Unknown
+// and would fail whole-struct deserialization.
+func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	// Skip on create (no prior state) and destroy (no plan).
+	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+		return
+	}
+
+	stateMembers, ok := planMembersFromAttribute(ctx, req.State, &resp.Diagnostics)
+	if !ok {
+		return
+	}
+	planMembers, ok := planMembersFromAttribute(ctx, req.Plan, &resp.Diagnostics)
+	if !ok {
+		return
+	}
+
+	stateHasMembers := membersListSet(stateMembers)
+	planHasMembers := membersListSet(planMembers)
+
+	// Block removing the members attribute via in-place update. The CVMs
+	// owned by phala_app_instance resources remain on the cloud, but
+	// phala_app would revert to anonymous-replicas semantics, and the next
+	// apply would try to scale the CVM count back to phala_app.replicas
+	// (deleting slots). Require destroy + recreate for this transition.
+	if stateHasMembers && !planHasMembers {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("members"),
+			"Cannot leave members mode in-place",
+			"This phala_app was previously declared with `members` (MIG mode). "+
+				"Removing the attribute in place is not supported because the cloud-side "+
+				"CVMs created via phala_app_instance would be orphaned and the next "+
+				"reconcile would delete named slots. Destroy and recreate the app instead.",
+		)
+		return
+	}
+
+	if !stateHasMembers && !planHasMembers {
+		// Pure legacy mode — nothing to guard.
+		return
+	}
+
+	// In members mode, block any change to the app-level mutable fields. We
+	// compare each field individually via attribute reads so we never need
+	// to deserialize the full model (which can fail when Computed fields
+	// are still Unknown at plan time). Crucially we compare Config (user
+	// HCL) against State, NOT Plan against State: Optional+Computed fields
+	// like image/size/disk_size/public_* show up as "changed" in the plan
+	// every time when the user didn't specify them, because the plan reverts
+	// to Unknown awaiting the next Read. Only block when the user explicitly
+	// wrote a different value in HCL.
+	var changed []path.Path
+	checkPaths := []path.Path{
+		path.Root("docker_compose"),
+		path.Root("pre_launch_script"),
+		path.Root("env"),
+		path.Root("encrypted_env"),
+		path.Root("env_keys"),
+		path.Root("env_compose_hash"),
+		path.Root("env_transaction_hash"),
+		path.Root("image"),
+		path.Root("size"),
+		path.Root("disk_size"),
+		path.Root("public_logs"),
+		path.Root("public_sysinfo"),
+		path.Root("public_tcbinfo"),
+		path.Root("gateway_enabled"),
+		path.Root("secure_time"),
+	}
+	for _, p := range checkPaths {
+		if configFieldMutated(ctx, req.Config, req.State, p, &resp.Diagnostics) {
+			changed = append(changed, p)
+		}
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if len(changed) == 0 {
+		return
+	}
+
+	fields := make([]string, 0, len(changed))
+	for _, p := range changed {
+		fields = append(fields, p.String())
+	}
+	detail := fmt.Sprintf(
+		"phala_app is in members (MIG) mode but the plan changes app-level "+
+			"fields that the provider cannot safely propagate across named slots "+
+			"with the current cloud API surface: %s.\n\n"+
+			"The per-CVM PATCH endpoints (/cvms/{id}/docker-compose, /envs, "+
+			"/os-image, /resources, /compose_file/provision) target a single CVM, "+
+			"and the legacy /apps/{id}/cvms/{src}/replicas fan-out is disabled in "+
+			"members mode (it would silently delete a named slot). Until an "+
+			"app-revision-aware update path exists, this Terraform provider refuses "+
+			"to apply such an update.\n\n"+
+			"Workarounds:\n"+
+			"  1. Destroy the phala_app and the matching phala_app_instance "+
+			"     resources, then recreate them with the new compose/env/image.\n"+
+			"  2. Keep these fields constant across the replica set, and use "+
+			"     phala_app_instance.env for per-slot overrides that are scoped "+
+			"     to that slot only.\n",
+		strings.Join(fields, ", "),
+	)
+	for _, p := range changed {
+		resp.Diagnostics.AddAttributeError(p, "Unsafe update in members mode", detail)
+	}
 }
 
 func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -557,13 +675,29 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		}
 	}
 
-	if err := r.reconcileReplicas(ctx, appID, desiredReplicas, "", waitTimeout(plan.WaitTimeoutSecond)); err != nil {
-		resp.Diagnostics.AddError("Failed to reconcile app replicas", err.Error())
-		return
-	}
+	// In members mode (MIG-style named slots), the slot count is owned by
+	// phala_app_instance resources, not by phala_app.replicas. Running
+	// reconcileReplicas would force the cloud's CVM count back to
+	// desiredReplicas (=1 in members mode) by calling DELETE on whichever
+	// CVM selectReplicaForRemoval picks — silently destroying a named slot.
+	// Skip the reconcile entirely; phala_app_instance handles add/remove.
+	if !appHasMembers(plan) && !appHasMembers(state) {
+		if err := r.reconcileReplicas(ctx, appID, desiredReplicas, "", waitTimeout(plan.WaitTimeoutSecond)); err != nil {
+			resp.Diagnostics.AddError("Failed to reconcile app replicas", err.Error())
+			return
+		}
 
-	if shouldWait(plan.WaitForReady) {
-		if err := r.waitForAppReady(ctx, appID, desiredReplicas, waitTimeout(plan.WaitTimeoutSecond)); err != nil {
+		if shouldWait(plan.WaitForReady) {
+			if err := r.waitForAppReady(ctx, appID, desiredReplicas, waitTimeout(plan.WaitTimeoutSecond)); err != nil {
+				resp.Diagnostics.AddError("App did not become ready", err.Error())
+				return
+			}
+		}
+	} else if shouldWait(plan.WaitForReady) {
+		// In members mode we still want to verify the bootstrap is healthy
+		// after any provider-only state changes — but only against the named
+		// slot count phala_app actually owns (1), not desiredReplicas.
+		if err := r.waitForAppReady(ctx, appID, 1, waitTimeout(plan.WaitTimeoutSecond)); err != nil {
 			resp.Diagnostics.AddError("App did not become ready", err.Error())
 			return
 		}
@@ -1211,6 +1345,142 @@ func validateMembersAndName(ctx context.Context, plan appResourceModel) diag.Dia
 	}
 
 	return diags
+}
+
+// appHasMembers reports whether the given app model is in MIG (members) mode.
+// Null/unknown/empty all mean "no members" — treated as the legacy
+// anonymous-replicas path.
+func appHasMembers(m appResourceModel) bool {
+	if m.Members.IsNull() || m.Members.IsUnknown() {
+		return false
+	}
+	return len(m.Members.Elements()) > 0
+}
+
+// membersListSet is the same predicate as appHasMembers but operates on a
+// raw types.List so we can use it from ModifyPlan, which reads attributes
+// individually to avoid full-model deserialization issues with Computed
+// Unknowns at plan time.
+func membersListSet(v types.List) bool {
+	if v.IsNull() || v.IsUnknown() {
+		return false
+	}
+	return len(v.Elements()) > 0
+}
+
+// planMembersFromAttribute pulls just the `members` attribute out of a
+// Plan or State without deserializing the whole resource. Returns
+// (list, true) on success; on diag error, appends to diags and returns
+// (zero, false).
+func planMembersFromAttribute(
+	ctx context.Context,
+	src interface {
+		GetAttribute(ctx context.Context, p path.Path, target interface{}) diag.Diagnostics
+	},
+	diags *diag.Diagnostics,
+) (types.List, bool) {
+	var v types.List
+	diags.Append(src.GetAttribute(ctx, path.Root("members"), &v)...)
+	if diags.HasError() {
+		return types.ListNull(types.StringType), false
+	}
+	return v, true
+}
+
+// configFieldMutated reports whether the user explicitly wrote a value at
+// `p` in HCL Config that differs from what's currently in State. Null in
+// Config means "user did not set this attribute" — for Optional+Computed
+// fields that's the default, not a mutation, so we return false. This is
+// the right comparison for our members-mode guardrail: the diff we care
+// about is user intent, not the noise produced by Computed-field churn on
+// every plan.
+func configFieldMutated(
+	ctx context.Context,
+	config, state interface {
+		GetAttribute(ctx context.Context, p path.Path, target interface{}) diag.Diagnostics
+	},
+	p path.Path,
+	diags *diag.Diagnostics,
+) bool {
+	var cv, sv attr.Value
+	diags.Append(config.GetAttribute(ctx, p, &cv)...)
+	diags.Append(state.GetAttribute(ctx, p, &sv)...)
+	if diags.HasError() {
+		return false
+	}
+	if cv == nil || cv.IsNull() {
+		// User didn't set this field in HCL — not a user-driven mutation.
+		return false
+	}
+	if sv == nil {
+		// State has no value but user set one. Treat as mutation.
+		return true
+	}
+	return !cv.Equal(sv)
+}
+
+// detectUnsafeMembersUpdate reports field changes that are unsafe to apply
+// in-place when phala_app is (or was) in members mode. The current
+// per-CVM PATCH endpoints update only one CVM at a time; in members mode
+// that would silently desync the named slots' compose/env/image. Worse,
+// the legacy reconcile-replicas path (which used to fan out via the
+// anonymous /replicas endpoint) is disabled in members mode for safety,
+// so any cloud-side mutation submitted at the app level cannot be
+// propagated to peer slots at all.
+//
+// Until the cloud exposes an app-revision-aware update endpoint that
+// preserves named slot identity, the safe answer is: don't try.
+//
+// Returns the set of changed attribute paths that triggered the block.
+// Empty slice means the update is safe to proceed with.
+func detectUnsafeMembersUpdate(plan, state appResourceModel) []path.Path {
+	var changed []path.Path
+	if !plan.DockerCompose.Equal(state.DockerCompose) {
+		changed = append(changed, path.Root("docker_compose"))
+	}
+	if !plan.PreLaunchScript.Equal(state.PreLaunchScript) {
+		changed = append(changed, path.Root("pre_launch_script"))
+	}
+	if !plan.Env.Equal(state.Env) {
+		changed = append(changed, path.Root("env"))
+	}
+	if !plan.EncryptedEnv.Equal(state.EncryptedEnv) {
+		changed = append(changed, path.Root("encrypted_env"))
+	}
+	if !plan.EnvKeys.Equal(state.EnvKeys) {
+		changed = append(changed, path.Root("env_keys"))
+	}
+	if !plan.EnvComposeHash.Equal(state.EnvComposeHash) {
+		changed = append(changed, path.Root("env_compose_hash"))
+	}
+	if !plan.EnvTransactionHash.Equal(state.EnvTransactionHash) {
+		changed = append(changed, path.Root("env_transaction_hash"))
+	}
+	if !plan.Image.Equal(state.Image) {
+		changed = append(changed, path.Root("image"))
+	}
+	if !plan.Size.Equal(state.Size) {
+		changed = append(changed, path.Root("size"))
+	}
+	if !plan.DiskSize.Equal(state.DiskSize) {
+		changed = append(changed, path.Root("disk_size"))
+	}
+	if !plan.PublicLogs.Equal(state.PublicLogs) {
+		changed = append(changed, path.Root("public_logs"))
+	}
+	if !plan.PublicSysinfo.Equal(state.PublicSysinfo) {
+		changed = append(changed, path.Root("public_sysinfo"))
+	}
+	if !plan.PublicTCBInfo.Equal(state.PublicTCBInfo) {
+		changed = append(changed, path.Root("public_tcbinfo"))
+	}
+	if !plan.GatewayEnabled.Equal(state.GatewayEnabled) {
+		changed = append(changed, path.Root("gateway_enabled"))
+	}
+	if !plan.SecureTime.Equal(state.SecureTime) {
+		changed = append(changed, path.Root("secure_time"))
+	}
+	return changed
 }
 
 func desiredReplicaCount(v types.Int64) (int, diag.Diagnostics) {
