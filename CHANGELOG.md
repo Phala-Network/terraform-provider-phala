@@ -4,21 +4,75 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-18
+
+This is a breaking release. The provider's model collapses to:
+
+- `phala_app` = app identity + exactly one **bootstrap** CVM.
+- `phala_app_instance` (new in 0.3) = additional named slots under the same app, declared explicitly.
+
+The legacy anonymous-replicas mode (`phala_app.replicas = N > 1` + `/cvms/{src}/replicas` fan-out) is gone. Every multi-CVM use case now goes through `phala_app_instance` with `phala_app.members`.
+
+### Breaking changes
+
+- **Removed `phala_app.replicas`.** The schema attribute, the `desiredReplicaCount` validator, the `reconcileReplicas` scale-up/scale-down loop, the per-CVM PATCH fan-out helpers, and the `/apps/{id}/cvms/{src}/replicas` API call site are all removed. Any HCL that sets `replicas` will fail validation; any prior state will refresh cleanly because `replicas` is no longer persisted.
+- **Removed the `/apps/{id}/cvms/{src}/replicas` code path.** The cloud endpoint still exists; the provider just doesn't call it.
+
+### Migration recipe (0.2.x → 0.3.0)
+
+Before (0.2.x):
+
+```hcl
+resource "phala_app" "web" {
+  name     = "web"
+  replicas = 3
+  size     = "tdx.small"
+  docker_compose = "..."
+}
+```
+
+After (0.3.0):
+
+```hcl
+locals {
+  web_members = ["web-0", "web-1", "web-2"]
+}
+
+resource "phala_app" "web" {
+  name    = local.web_members[0]
+  members = local.web_members
+  size    = "tdx.small"
+  docker_compose = "..."
+}
+
+resource "phala_app_instance" "web" {
+  for_each = toset(phala_app.web.members)
+  app_id   = phala_app.web.app_id
+  name     = each.value
+}
+```
+
+This rename gives each CVM a stable per-slot identity (you can `-target` individual slots, output their `vm_uuid`, and wire them into service-mesh peer IDs). It also makes the slot count owned by `phala_app_instance` resources rather than a single `replicas` integer that was racy with named instances.
+
+For genuinely stateless single-CVM apps, the migration is to just delete the `replicas = 1` line (it's the default) and not declare any `phala_app_instance`.
+
 ### Added
 
 - New `phala_app_instance` resource keyed by `(app_id, name)` that maps a Terraform resource to a stable logical member of a replica set. Backed by `POST /apps/{app_id}/instances` with a custom CVM name (phala-cloud-monorepo#1386). The slot survives CVM replacement: `vm_uuid` is computed and refreshes on Read, while `name` is operator-chosen and immutable (forces replace).
 - `phala_app_instance` adopts the bootstrap CVM owned by `phala_app` when the names match, so MIG-style replica sets can be declared with a single symmetric `for_each` over all slot names. Adopted instances expose `managed = false` and skip the cloud DELETE on destroy; created instances have `managed = true` and own the CVM lifecycle.
-- New optional `members` list on `phala_app` declares the full slot list for MIG-style usage. When set, the provider validates at plan time that `name` is one of `members` and that `replicas` is unset or 1 — catching the typo and mis-mode footguns. Downstream `phala_app_instance` resources should use `for_each = toset(phala_app.foo.members)` to keep the slot list a single source of truth.
+- New optional `members` list on `phala_app` declares the full slot list for MIG-style usage. When set, the provider validates at plan time that `name` is one of `members`. Downstream `phala_app_instance` resources should use `for_each = toset(phala_app.foo.members)` to keep the slot list a single source of truth.
+- New per-instance `env` on `phala_app_instance`: encrypted with the app's env public key and seeded at create time on managed instances. Adopted (bootstrap) instances reject `env`/`encrypted_env` — set those on `phala_app.env` instead.
 - Design note `docs/design-notes/cvm-rename-endpoint.md` capturing the verified shape of `PATCH /cvms/{cvm_id}/name` for future reference (recovery tooling, CLI parity).
-
-### Fixed
-
-- `phala_app` no longer silently deletes a named slot CVM on every Update in members mode. The legacy `reconcileReplicas` fan-out (which scales the cloud-side CVM count to match `phala_app.replicas`) is now skipped when `members` is set in either prior state or the new plan — the named slot count is owned by `phala_app_instance` resources, not by `replicas`.
 
 ### Changed
 
-- `phala_app` now refuses at plan time to update any cloud-side mutable field (`docker_compose`, `pre_launch_script`, `env`, `encrypted_env`, `env_keys`, `env_compose_hash`, `env_transaction_hash`, `image`, `size`, `disk_size`, `public_logs`, `public_sysinfo`, `public_tcbinfo`, `gateway_enabled`, `secure_time`) when the resource is in members (MIG) mode. The existing per-CVM PATCH endpoints (`/cvms/{id}/docker-compose`, `/envs`, `/os-image`, `/resources`, `/compose_file/provision`) only target one CVM, and the legacy app-wide fan-out is unsafe in members mode (it would silently delete a named slot). Until an app-revision-aware update path lands on the cloud, the safe answer is to refuse the plan rather than half-apply it. Workarounds: destroy + recreate, or move per-slot variations to `phala_app_instance.env`.
-- Removing `members` from a `phala_app` resource that previously had it set is also blocked at plan time (the transition would orphan named slot CVMs and trigger a scale-down on the next reconcile). Destroy and recreate the app instead.
+- `phala_app.Update` now mutates the **bootstrap CVM only** (`docker_compose`, `pre_launch_script`, `env`, `image`, `size`, `disk_size`, compose-runtime settings). In members mode these mutations are refused at plan time, because the cloud has no app-revision update endpoint that would propagate them across named slots without losing identity. Workarounds: destroy + recreate, or move per-slot variations to `phala_app_instance.env`.
+- Removing `members` from a `phala_app` resource that previously had it set is blocked at plan time (the transition would orphan named slot CVMs). Destroy and recreate the app instead.
+- `phala_app.primary_cvm_id` now refers to the bootstrap CVM specifically — the CVM whose name equals `phala_app.name`. App-level mutations always target it.
+
+### Fixed
+
+- The bug where `phala_app.Update` would silently delete one of the named slot CVMs is gone by construction: the `reconcileReplicas` function that caused it no longer exists.
 
 ## [0.2.0-beta.4] - 2026-05-17
 

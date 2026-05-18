@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -15,7 +14,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -57,7 +55,6 @@ type appResourceModel struct {
 	EnvComposeHash     types.String `tfsdk:"env_compose_hash"`
 	EnvTransactionHash types.String `tfsdk:"env_transaction_hash"`
 	Listed             types.Bool   `tfsdk:"listed"`
-	Replicas           types.Int64  `tfsdk:"replicas"`
 	WaitForReady       types.Bool   `tfsdk:"wait_for_ready"`
 	WaitTimeoutSecond  types.Int64  `tfsdk:"wait_timeout_seconds"`
 	Status             types.String `tfsdk:"status"`
@@ -140,20 +137,16 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			stringplanmodifier.UseStateForUnknown(),
 		},
 	}
-	attrs["replicas"] = schema.Int64Attribute{
-		Optional:            true,
-		Computed:            true,
-		Default:             int64default.StaticInt64(1),
-		MarkdownDescription: "Desired number of CVMs under this app.",
-	}
 	attrs["primary_cvm_id"] = schema.StringAttribute{
-		Computed:            true,
-		MarkdownDescription: "Primary CVM identifier used for app-level patch operations.",
+		Computed: true,
+		MarkdownDescription: "Bootstrap CVM identifier — the CVM created by `phala_app` itself, which " +
+			"in members (MIG) mode is also the slot whose name equals `phala_app.name`. " +
+			"This is the only CVM that `phala_app` mutates directly.",
 	}
 	attrs["cvm_ids"] = schema.ListAttribute{
 		Computed:            true,
 		ElementType:         types.StringType,
-		MarkdownDescription: "Identifiers of CVMs currently attached to this app.",
+		MarkdownDescription: "Identifiers of every CVM currently attached to this app (bootstrap plus any `phala_app_instance`s).",
 	}
 	attrs["instances"] = schema.ListNestedAttribute{
 		Computed:            true,
@@ -307,11 +300,12 @@ func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 			"fields that the provider cannot safely propagate across named slots "+
 			"with the current cloud API surface: %s.\n\n"+
 			"The per-CVM PATCH endpoints (/cvms/{id}/docker-compose, /envs, "+
-			"/os-image, /resources, /compose_file/provision) target a single CVM, "+
-			"and the legacy /apps/{id}/cvms/{src}/replicas fan-out is disabled in "+
-			"members mode (it would silently delete a named slot). Until an "+
-			"app-revision-aware update path exists, this Terraform provider refuses "+
-			"to apply such an update.\n\n"+
+			"/os-image, /resources, /compose_file/provision) target a single "+
+			"CVM. Applying them through phala_app would mutate only the "+
+			"bootstrap slot and leave every phala_app_instance slot on the "+
+			"old revision — divergent compose/env/image across the replica "+
+			"set. Until an app-revision-aware update endpoint preserves all "+
+			"named slots, this provider refuses such an update.\n\n"+
 			"Workarounds:\n"+
 			"  1. Destroy the phala_app and the matching phala_app_instance "+
 			"     resources, then recreate them with the new compose/env/image.\n"+
@@ -348,8 +342,6 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
-	replicas, diags := desiredReplicaCount(plan.Replicas)
-	resp.Diagnostics.Append(diags...)
 	sshAuthorizedKeys, diags := listValueAsStrings(ctx, plan.SSHAuthorizedKeys, "ssh_authorized_keys")
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
@@ -440,16 +432,8 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
-	sourceVMUUID := strings.TrimSpace(createResp.VMUUID)
-	if replicas > 1 {
-		if err := r.reconcileReplicas(ctx, appID, replicas, sourceVMUUID, waitTimeout(plan.WaitTimeoutSecond)); err != nil {
-			resp.Diagnostics.AddError("Failed to scale app replicas", err.Error())
-			return
-		}
-	}
-
 	if shouldWait(plan.WaitForReady) {
-		if err := r.waitForAppReady(ctx, appID, replicas, waitTimeout(plan.WaitTimeoutSecond)); err != nil {
+		if err := r.waitForAppReady(ctx, appID, 1, waitTimeout(plan.WaitTimeoutSecond)); err != nil {
 			resp.Diagnostics.AddError("App did not become ready", err.Error())
 			return
 		}
@@ -529,9 +513,6 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	plan.SecureTime = inheritOptionalBool(plan.SecureTime, state.SecureTime)
 	plan.StorageFS = inheritOptionalString(plan.StorageFS, state.StorageFS)
 
-	desiredReplicas, diags := desiredReplicaCount(plan.Replicas)
-	resp.Diagnostics.Append(diags...)
-
 	desiredImage := plan.Image
 	imageChanged := !plan.Image.Equal(state.Image)
 	planSettings := composeSettingsValues{plan.PublicLogs, plan.PublicSysinfo, plan.PublicTCBInfo, plan.GatewayEnabled, plan.SecureTime}
@@ -564,12 +545,19 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 
 	cvms, err := r.fetchAppCVMs(ctx, appID)
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to fetch current app replicas", err.Error())
+		resp.Diagnostics.AddError("Failed to fetch current app CVMs", err.Error())
 		return
 	}
-	primaryCVMID := selectPrimaryIdentifier(plan.PrimaryCVMID, state.PrimaryCVMID, cvms, plan.Name.ValueString())
-	if primaryCVMID == "" {
-		resp.Diagnostics.AddError("No app replicas found", "App has no CVMs available for update operations.")
+	// All app-level mutations target the bootstrap CVM only. The bootstrap is
+	// the CVM whose name matches plan.Name (in members mode, that's
+	// phala_app.name's slot; in single-CVM mode it's the only CVM). The
+	// guardrail in ModifyPlan blocks any of these mutations in members mode
+	// because the cloud has no app-revision update endpoint that would
+	// propagate them across slots — so reaching this point implies a
+	// single-CVM app where touching the bootstrap is the whole app.
+	bootstrapID := selectPrimaryIdentifier(plan.PrimaryCVMID, state.PrimaryCVMID, cvms, plan.Name.ValueString())
+	if bootstrapID == "" {
+		resp.Diagnostics.AddError("No CVM found for app", "App has no CVMs available for update operations.")
 		return
 	}
 
@@ -581,7 +569,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		if diskSizeChanged {
 			resourceReq["disk_size"] = plan.DiskSize.ValueInt64()
 		}
-		if err := r.client.PatchJSON(ctx, cvmPath(primaryCVMID)+"/resources", resourceReq, nil); err != nil {
+		if err := r.client.PatchJSON(ctx, cvmPath(bootstrapID)+"/resources", resourceReq, nil); err != nil {
 			resp.Diagnostics.AddError("Failed to update app resources", err.Error())
 			return
 		}
@@ -601,7 +589,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 			EnvKeys:         composeEnvKeys,
 			HasEnvKeys:      composeHasEnvKeys,
 		}, updateComposeEnvKeys)
-		if err := r.provisionAndApplyComposeSettingsAcrossReplicas(ctx, cvms, primaryCVMID, composeReq); err != nil {
+		if err := provisionAndApplyComposeFileUpdate(ctx, r.client, bootstrapID, composeReq); err != nil {
 			resp.Diagnostics.AddError("Failed to update app compose settings", err.Error())
 			return
 		}
@@ -612,14 +600,14 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 			resp.Diagnostics.AddError("Invalid image update", "image must be set to a target OS image name when updating.")
 			return
 		}
-		if err := r.patchOSImageAcrossReplicas(ctx, cvms, primaryCVMID, plan.Image.ValueString()); err != nil {
+		if err := r.client.PatchJSON(ctx, cvmPath(bootstrapID)+"/os-image", map[string]any{"os_image_name": plan.Image.ValueString()}, nil); err != nil {
 			resp.Diagnostics.AddError("Failed to update app OS image", err.Error())
 			return
 		}
 	}
 
 	if !plan.DockerCompose.Equal(state.DockerCompose) {
-		if err := r.patchTextAcrossReplicas(ctx, cvms, primaryCVMID, "/docker-compose", plan.DockerCompose.ValueString(), map[string]string{"Content-Type": "text/yaml"}); err != nil {
+		if err := r.client.PatchText(ctx, cvmPath(bootstrapID)+"/docker-compose", plan.DockerCompose.ValueString(), map[string]string{"Content-Type": "text/yaml"}, nil); err != nil {
 			resp.Diagnostics.AddError("Failed to update app docker compose", err.Error())
 			return
 		}
@@ -630,7 +618,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		if !plan.PreLaunchScript.IsNull() && !plan.PreLaunchScript.IsUnknown() {
 			script = plan.PreLaunchScript.ValueString()
 		}
-		if err := r.patchTextAcrossReplicas(ctx, cvms, primaryCVMID, "/pre-launch-script", script, map[string]string{"Content-Type": "text/plain"}); err != nil {
+		if err := r.client.PatchText(ctx, cvmPath(bootstrapID)+"/pre-launch-script", script, map[string]string{"Content-Type": "text/plain"}, nil); err != nil {
 			resp.Diagnostics.AddError("Failed to update app pre-launch script", err.Error())
 			return
 		}
@@ -642,14 +630,14 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		!plan.EnvComposeHash.Equal(state.EnvComposeHash) ||
 		!plan.EnvTransactionHash.Equal(state.EnvTransactionHash) {
 		if envCfg.HasAutoEnv {
-			current, err := r.fetchCVM(ctx, primaryCVMID)
+			current, err := r.fetchCVM(ctx, bootstrapID)
 			if err != nil {
 				resp.Diagnostics.AddError("Failed to load app encryption key", err.Error())
 				return
 			}
 			pubkey := current.envEncryptionPubkey()
 			if pubkey == "" {
-				resp.Diagnostics.AddError("Missing encryption public key", "Primary CVM response did not include encrypted_env_pubkey. Use manual encrypted_env/env_keys mode.")
+				resp.Diagnostics.AddError("Missing encryption public key", "Bootstrap CVM response did not include encrypted_env_pubkey. Use manual encrypted_env/env_keys mode.")
 				return
 			}
 			if err := envCfg.encryptAutoEnv(pubkey); err != nil {
@@ -662,7 +650,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 			resp.Diagnostics.AddError("Missing encrypted_env", err.Error())
 			return
 		}
-		if err := r.patchJSONAcrossReplicas(ctx, cvms, primaryCVMID, "/envs", envReq); err != nil {
+		if err := r.client.PatchJSON(ctx, cvmPath(bootstrapID)+"/envs", envReq, nil); err != nil {
 			if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == 465 {
 				resp.Diagnostics.AddError(
 					"Encrypted env update requires on-chain verification",
@@ -675,28 +663,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		}
 	}
 
-	// In members mode (MIG-style named slots), the slot count is owned by
-	// phala_app_instance resources, not by phala_app.replicas. Running
-	// reconcileReplicas would force the cloud's CVM count back to
-	// desiredReplicas (=1 in members mode) by calling DELETE on whichever
-	// CVM selectReplicaForRemoval picks — silently destroying a named slot.
-	// Skip the reconcile entirely; phala_app_instance handles add/remove.
-	if !appHasMembers(plan) && !appHasMembers(state) {
-		if err := r.reconcileReplicas(ctx, appID, desiredReplicas, "", waitTimeout(plan.WaitTimeoutSecond)); err != nil {
-			resp.Diagnostics.AddError("Failed to reconcile app replicas", err.Error())
-			return
-		}
-
-		if shouldWait(plan.WaitForReady) {
-			if err := r.waitForAppReady(ctx, appID, desiredReplicas, waitTimeout(plan.WaitTimeoutSecond)); err != nil {
-				resp.Diagnostics.AddError("App did not become ready", err.Error())
-				return
-			}
-		}
-	} else if shouldWait(plan.WaitForReady) {
-		// In members mode we still want to verify the bootstrap is healthy
-		// after any provider-only state changes — but only against the named
-		// slot count phala_app actually owns (1), not desiredReplicas.
+	if shouldWait(plan.WaitForReady) {
 		if err := r.waitForAppReady(ctx, appID, 1, waitTimeout(plan.WaitTimeoutSecond)); err != nil {
 			resp.Diagnostics.AddError("App did not become ready", err.Error())
 			return
@@ -834,137 +801,6 @@ func (r *appResource) fetchCVM(ctx context.Context, id string) (*cvmAPIResponse,
 		return nil, err
 	}
 	return &out, nil
-}
-
-func (r *appResource) reconcileReplicas(
-	ctx context.Context,
-	appID string,
-	desired int,
-	preferredSourceVMUUID string,
-	timeout time.Duration,
-) error {
-	if desired < 1 {
-		return fmt.Errorf("replicas must be >= 1")
-	}
-
-	cvms, err := r.fetchAppCVMs(ctx, appID)
-	if err != nil {
-		return err
-	}
-
-	deadline := time.Now().Add(timeout)
-	if len(cvms) == 0 {
-		if strings.TrimSpace(preferredSourceVMUUID) != "" {
-			// Freshly created apps may not immediately show CVMs in list endpoint.
-			cvms = append(cvms, cvmAPIResponse{
-				VMUUID: strings.TrimSpace(preferredSourceVMUUID),
-				Status: "starting",
-			})
-		} else {
-			for time.Now().Before(deadline) {
-				cvms, err = r.fetchAppCVMs(ctx, appID)
-				if err != nil {
-					if isRetryable(err) || isNotFound(err) {
-						select {
-						case <-ctx.Done():
-							return ctx.Err()
-						case <-time.After(pollInterval(2 * time.Second)):
-							continue
-						}
-					}
-					return err
-				}
-				if len(cvms) > 0 {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(pollInterval(2 * time.Second)):
-				}
-			}
-			if len(cvms) == 0 {
-				return fmt.Errorf("app %q has no source CVM to scale", appID)
-			}
-		}
-	}
-
-	for len(cvms) < desired {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting to scale app %q to %d replicas", appID, desired)
-		}
-
-		source := selectReplicaSource(cvms, preferredSourceVMUUID)
-		if source == "" {
-			return fmt.Errorf("unable to determine source vm_uuid for app replica creation")
-		}
-
-		replicatePath := appPath(appID) + "/cvms/" + url.PathEscape(source) + "/replicas"
-		if err := r.client.PostJSON(ctx, replicatePath, map[string]any{}, nil); err != nil {
-			return err
-		}
-
-		target := len(cvms) + 1
-		if err := r.waitForReplicaCount(ctx, appID, target, deadline); err != nil {
-			return err
-		}
-		cvms, err = r.fetchAppCVMs(ctx, appID)
-		if err != nil {
-			return err
-		}
-	}
-
-	for len(cvms) > desired {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting to scale app %q down to %d replicas", appID, desired)
-		}
-
-		removable := selectReplicaForRemoval(cvms, preferredSourceVMUUID)
-		if removable == "" {
-			return fmt.Errorf("unable to determine removable replica for app %q", appID)
-		}
-
-		if err := r.client.Delete(ctx, cvmPath(removable)); err != nil && !isNotFound(err) {
-			return err
-		}
-
-		target := len(cvms) - 1
-		if err := r.waitForReplicaCount(ctx, appID, target, deadline); err != nil {
-			return err
-		}
-		cvms, err = r.fetchAppCVMs(ctx, appID)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (r *appResource) waitForReplicaCount(ctx context.Context, appID string, target int, deadline time.Time) error {
-	for time.Now().Before(deadline) {
-		cvms, err := r.fetchAppCVMs(ctx, appID)
-		if err != nil {
-			if isRetryable(err) || isNotFound(err) {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(pollInterval(2 * time.Second)):
-					continue
-				}
-			}
-			return err
-		}
-		if len(cvms) == target {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(pollInterval(2 * time.Second)):
-		}
-	}
-	return fmt.Errorf("timeout waiting for app %q to reach %d replicas", appID, target)
 }
 
 func (r *appResource) waitForAppDeletion(ctx context.Context, appID string, deadline time.Time, pollBase time.Duration) (bool, error) {
@@ -1178,43 +1014,30 @@ func (r *appResource) populateState(
 		}
 	}
 
-	replicaIDs := make([]string, 0, len(cvms))
+	cvmIDs := make([]string, 0, len(cvms))
 	for _, cvm := range cvms {
 		if id := selectReplicaIdentifier(cvm); id != "" {
-			replicaIDs = append(replicaIDs, id)
+			cvmIDs = append(cvmIDs, id)
 		}
 	}
 	if len(cvms) == 0 {
-		if state.Replicas.IsNull() || state.Replicas.IsUnknown() || state.Replicas.ValueInt64() <= 0 {
-			state.Replicas = types.Int64Value(0)
-			state.Instances = types.ListNull(appInstanceObjectType())
-			emptyIDs, listDiags := types.ListValueFrom(ctx, types.StringType, []string{})
-			diags.Append(listDiags...)
-			if !diags.HasError() {
-				state.CVMIDs = emptyIDs
-			}
+		// Transient empty response from the cloud (common right after submit)
+		// — keep existing CVMIDs/Instances rather than wiping them. The next
+		// refresh will reconcile. If state was already empty, leave it empty.
+		existingIDs, _ := listValueAsStrings(ctx, state.CVMIDs, "cvm_ids")
+		if len(existingIDs) > 0 {
+			return diags
+		}
+		state.Instances = types.ListNull(appInstanceObjectType())
+		emptyIDs, listDiags := types.ListValueFrom(ctx, types.StringType, []string{})
+		diags.Append(listDiags...)
+		if !diags.HasError() {
+			state.CVMIDs = emptyIDs
 		}
 		return diags
 	}
-	sort.Strings(replicaIDs)
-	replicaCount := len(cvms)
-	if replicaCount == 0 && !state.Replicas.IsNull() && !state.Replicas.IsUnknown() && state.Replicas.ValueInt64() > 0 {
-		// Async create/update can temporarily return no replicas immediately after submit.
-		replicaCount = int(state.Replicas.ValueInt64())
-	}
-	members, memberDiags := listValueAsStrings(ctx, state.Members, "members")
-	diags.Append(memberDiags...)
-	if len(members) > 0 {
-		// In named-slot mode, phala_app.replicas is intentionally not the
-		// physical CVM count. phala_app owns only the bootstrap CVM and
-		// phala_app_instance resources own the additional named slots.
-		if state.Replicas.IsNull() || state.Replicas.IsUnknown() || state.Replicas.ValueInt64() < 1 {
-			state.Replicas = types.Int64Value(1)
-		}
-	} else {
-		state.Replicas = types.Int64Value(int64(replicaCount))
-	}
-	listValue, listDiags := types.ListValueFrom(ctx, types.StringType, replicaIDs)
+	sort.Strings(cvmIDs)
+	listValue, listDiags := types.ListValueFrom(ctx, types.StringType, cvmIDs)
 	diags.Append(listDiags...)
 	if !diags.HasError() {
 		state.CVMIDs = listValue
@@ -1276,13 +1099,10 @@ func equalStringSlices(a, b []string) bool {
 	return true
 }
 
-// validateMembersAndName enforces the MIG-mode invariants for phala_app:
-//
-//  1. If `members` is set, `name` must be one of `members` — otherwise the
-//     bootstrap CVM has nothing to adopt it and becomes an unreferenced extra.
-//  2. If `members` is set, `replicas` must be unset, unknown, or exactly 1.
-//     The legacy /cvms/{src}/replicas path creates anonymous duplicates that
-//     collide with named slots; mixing the two yields confusing CVM lists.
+// validateMembersAndName enforces the MIG-mode invariant for phala_app:
+// if `members` is set, `name` must be one of `members`. Otherwise the
+// bootstrap CVM has nothing to adopt it and becomes an unreferenced extra
+// under the app.
 //
 // Returns Terraform diagnostics; callers should bail if any error is added.
 func validateMembersAndName(ctx context.Context, plan appResourceModel) diag.Diagnostics {
@@ -1327,19 +1147,6 @@ func validateMembersAndName(ctx context.Context, plan appResourceModel) diag.Dia
 					"otherwise it becomes an unreferenced extra. Set name to one of the members "+
 					"(typically members[0]).",
 				planName, members,
-			),
-		)
-	}
-
-	if !plan.Replicas.IsNull() && !plan.Replicas.IsUnknown() && plan.Replicas.ValueInt64() > 1 {
-		diags.AddAttributeError(
-			path.Root("replicas"),
-			"replicas incompatible with members",
-			fmt.Sprintf(
-				"phala_app.replicas = %d but members is set (MIG mode). The legacy anonymous-replica "+
-					"path conflicts with named slots — leave replicas unset (or set it to 1) and declare "+
-					"additional slots via phala_app_instance with for_each over members.",
-				plan.Replicas.ValueInt64(),
 			),
 		)
 	}
@@ -1483,23 +1290,6 @@ func detectUnsafeMembersUpdate(plan, state appResourceModel) []path.Path {
 	return changed
 }
 
-func desiredReplicaCount(v types.Int64) (int, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	if v.IsNull() {
-		return 1, diags
-	}
-	if v.IsUnknown() {
-		diags.AddError("Unknown replicas value", "replicas must be known at apply time.")
-		return 0, diags
-	}
-	value := v.ValueInt64()
-	if value < 1 {
-		diags.AddError("Invalid replicas value", "replicas must be >= 1.")
-		return 0, diags
-	}
-	return int(value), diags
-}
-
 func appIDFromState(state appResourceModel) string {
 	if !state.AppID.IsNull() && !state.AppID.IsUnknown() && strings.TrimSpace(state.AppID.ValueString()) != "" {
 		return ensureAppPrefix(state.AppID.ValueString())
@@ -1563,66 +1353,6 @@ func selectReplicaIdentifier(cvm cvmAPIResponse) string {
 	return ""
 }
 
-func selectReplicaSource(cvms []cvmAPIResponse, preferredSourceVMUUID string) string {
-	if preferredSourceVMUUID != "" {
-		for _, cvm := range cvms {
-			if strings.EqualFold(strings.TrimSpace(cvm.VMUUID), strings.TrimSpace(preferredSourceVMUUID)) {
-				return strings.TrimSpace(cvm.VMUUID)
-			}
-		}
-	}
-	for _, cvm := range cvms {
-		if strings.TrimSpace(cvm.VMUUID) != "" && strings.EqualFold(strings.TrimSpace(cvm.Status), "running") {
-			return strings.TrimSpace(cvm.VMUUID)
-		}
-	}
-	for _, cvm := range cvms {
-		if strings.TrimSpace(cvm.VMUUID) != "" {
-			return strings.TrimSpace(cvm.VMUUID)
-		}
-	}
-	return ""
-}
-
-func selectReplicaForRemoval(cvms []cvmAPIResponse, preserveVMUUID string) string {
-	for i := len(cvms) - 1; i >= 0; i-- {
-		candidate := cvms[i]
-		if preserveVMUUID != "" && strings.EqualFold(strings.TrimSpace(candidate.VMUUID), strings.TrimSpace(preserveVMUUID)) {
-			continue
-		}
-		if id := selectReplicaIdentifier(candidate); id != "" {
-			return id
-		}
-	}
-	for i := len(cvms) - 1; i >= 0; i-- {
-		if id := selectReplicaIdentifier(cvms[i]); id != "" {
-			return id
-		}
-	}
-	return ""
-}
-
-func orderedReplicaIDs(cvms []cvmAPIResponse, preferred string) []string {
-	ids := make([]string, 0, len(cvms)+1)
-	seen := map[string]struct{}{}
-	add := func(id string) {
-		trimmed := strings.TrimSpace(id)
-		if trimmed == "" {
-			return
-		}
-		if _, ok := seen[trimmed]; ok {
-			return
-		}
-		seen[trimmed] = struct{}{}
-		ids = append(ids, trimmed)
-	}
-	add(preferred)
-	for _, cvm := range cvms {
-		add(selectReplicaIdentifier(cvm))
-	}
-	return ids
-}
-
 func buildAppInstances(ctx context.Context, cvms []cvmAPIResponse) (types.List, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	ordered := append([]cvmAPIResponse(nil), cvms...)
@@ -1668,137 +1398,6 @@ func buildAppInstances(ctx context.Context, cvms []cvmAPIResponse) (types.List, 
 		return types.ListNull(appInstanceObjectType()), diags
 	}
 	return value, diags
-}
-
-func (r *appResource) patchTextAcrossReplicas(
-	ctx context.Context,
-	cvms []cvmAPIResponse,
-	preferredID string,
-	pathSuffix string,
-	body string,
-	headers map[string]string,
-) error {
-	ids := orderedReplicaIDs(cvms, preferredID)
-	if len(ids) == 0 {
-		return fmt.Errorf("no app replicas available for patch operation")
-	}
-
-	var lastErr error
-	for i, id := range ids {
-		err := r.client.PatchText(ctx, cvmPath(id)+pathSuffix, body, headers, nil)
-		if err == nil {
-			return nil
-		}
-		apiErr, ok := err.(*APIError)
-		if ok && apiErr.StatusCode == http.StatusConflict && i < len(ids)-1 {
-			lastErr = err
-			continue
-		}
-		return err
-	}
-
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("patch operation failed on all app replicas")
-}
-
-func (r *appResource) patchJSONAcrossReplicas(
-	ctx context.Context,
-	cvms []cvmAPIResponse,
-	preferredID string,
-	pathSuffix string,
-	payload any,
-) error {
-	ids := orderedReplicaIDs(cvms, preferredID)
-	if len(ids) == 0 {
-		return fmt.Errorf("no app replicas available for patch operation")
-	}
-
-	var lastErr error
-	for i, id := range ids {
-		err := r.client.PatchJSON(ctx, cvmPath(id)+pathSuffix, payload, nil)
-		if err == nil {
-			return nil
-		}
-		apiErr, ok := err.(*APIError)
-		if ok && apiErr.StatusCode == http.StatusConflict && i < len(ids)-1 {
-			lastErr = err
-			continue
-		}
-		return err
-	}
-
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("patch operation failed on all app replicas")
-}
-
-func (r *appResource) patchOSImageAcrossReplicas(
-	ctx context.Context,
-	cvms []cvmAPIResponse,
-	preferredID string,
-	imageName string,
-) error {
-	ids := orderedReplicaIDs(cvms, preferredID)
-	if len(ids) == 0 {
-		return fmt.Errorf("no app replicas available for OS image update")
-	}
-
-	payload := map[string]any{
-		"os_image_name": imageName,
-	}
-
-	var lastErr error
-	for i, id := range ids {
-		err := r.client.PatchJSON(ctx, cvmPath(id)+"/os-image", payload, nil)
-		if err == nil {
-			return nil
-		}
-		apiErr, ok := err.(*APIError)
-		if ok && apiErr.StatusCode == http.StatusConflict && i < len(ids)-1 {
-			lastErr = err
-			continue
-		}
-		return err
-	}
-
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("OS image update failed on all app replicas")
-}
-
-func (r *appResource) provisionAndApplyComposeSettingsAcrossReplicas(
-	ctx context.Context,
-	cvms []cvmAPIResponse,
-	preferredID string,
-	provisionReq map[string]any,
-) error {
-	ids := orderedReplicaIDs(cvms, preferredID)
-	if len(ids) == 0 {
-		return fmt.Errorf("no app replicas available for compose settings update")
-	}
-
-	var lastErr error
-	for i, id := range ids {
-		err := provisionAndApplyComposeFileUpdate(ctx, r.client, id, provisionReq)
-		if err == nil {
-			return nil
-		}
-		apiErr, ok := err.(*APIError)
-		if ok && apiErr.StatusCode == http.StatusConflict && i < len(ids)-1 {
-			lastErr = err
-			continue
-		}
-		return err
-	}
-
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("compose settings update failed on all app replicas")
 }
 
 func normalizeCVMInfos(cvms []cvmAPIResponse) []cvmAPIResponse {

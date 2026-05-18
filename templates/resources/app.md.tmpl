@@ -15,26 +15,22 @@ description: |-
 
 ## Behavior Notes
 
-- `phala_app` is the main lifecycle resource for Phala Cloud deployments.
-- `replicas` scales one app definition horizontally across multiple **anonymous** CVMs (all share the parent app's name). Use for stateless replica sets.
-- For stateful replica sets with stable per-member identity (Consul, Patroni, etcd, Kafka, etc.), declare `members` and pair `phala_app` with `phala_app_instance`. See [`phala_app_instance`](app_instance.md) for the full MIG-style pattern.
-- `docker_compose`, runtime visibility flags, and encrypted environment updates are applied across the app.
-- `instances` exposes the current per-CVM member view without introducing backend-native ordinals.
-- `wait_for_ready = true` waits until the app reports running replicas before returning.
+- `phala_app` is the app identity + the **bootstrap CVM**. Every Phala app is born with exactly one CVM (the cloud API has no "empty app" endpoint).
+- For stateful replica sets with per-member identity, declare `members` and pair `phala_app` with `phala_app_instance`. See [`phala_app_instance`](app_instance.md) for the full pattern. In single-CVM apps, leave `members` unset.
+- `docker_compose`, runtime visibility flags, OS image, encrypted env, and instance size are mutable in place on a single-CVM app — they target the bootstrap CVM via per-CVM PATCH endpoints.
+- `instances` exposes the current per-CVM view (bootstrap + any `phala_app_instance` slots).
+- `wait_for_ready = true` waits until the bootstrap CVM reports running before returning.
 - `ssh_authorized_keys`, `storage_fs`, placement fields, and deterministic identity inputs can affect replacement behavior; check the schema details below before changing them in-place.
 
 ## MIG-mode validation
 
-When `members` is set, the provider enforces two invariants at plan time:
-
-1. `name` must be one of `members` — otherwise the bootstrap CVM has nothing to adopt it and would become an unreferenced extra under the app.
-2. `replicas` must be unset or exactly 1 — the legacy anonymous-replica path (`/cvms/{src}/replicas`) conflicts with named slots and would silently create unnamed duplicates.
+When `members` is set, the provider enforces at plan time that `name` is one of `members` — otherwise the bootstrap CVM has nothing to adopt it and would become an unreferenced extra under the app.
 
 Downstream `phala_app_instance` resources should set `for_each = toset(phala_app.foo.members)` so the slot list stays a single source of truth.
 
 ## In-place updates are blocked in members mode
 
-The cloud's per-CVM PATCH endpoints (`/cvms/{id}/docker-compose`, `/envs`, `/os-image`, `/resources`, `/compose_file/provision`) only target a single CVM, and the legacy app-wide fan-out (`/apps/{id}/cvms/{src}/replicas`) is intentionally disabled in members mode because it would silently delete a named slot. Until the cloud exposes an app-revision-aware update endpoint that preserves named slot identity, this provider refuses at plan time to update any of these `phala_app` fields when `members` is set:
+The cloud's per-CVM PATCH endpoints (`/cvms/{id}/docker-compose`, `/envs`, `/os-image`, `/resources`, `/compose_file/provision`) only target a single CVM. Applying them through `phala_app` in members mode would mutate the bootstrap slot and leave every `phala_app_instance` slot on the old revision — divergent compose/env/image across the replica set. Until the cloud exposes an app-revision-aware update endpoint that preserves all named slots, this provider refuses at plan time to update any of these `phala_app` fields when `members` is set:
 
 `docker_compose`, `pre_launch_script`, `env`, `encrypted_env`, `env_keys`, `env_compose_hash`, `env_transaction_hash`, `image`, `size`, `disk_size`, `public_logs`, `public_sysinfo`, `public_tcbinfo`, `gateway_enabled`, `secure_time`.
 
@@ -42,6 +38,10 @@ Workarounds:
 1. Destroy the `phala_app` + matching `phala_app_instance` resources and recreate them with the new compose / env / image.
 2. Move per-slot variations to `phala_app_instance.env` (per-slot encrypted env at create time; immutable thereafter).
 
-Adding or removing entries from `members` is still safe (it just spawns or destroys `phala_app_instance` resources). Removing the `members` attribute entirely (transitioning back to anonymous-replicas mode) is **not** safe and is also blocked at plan time — destroy and recreate the app.
+Adding or removing entries from `members` is still safe (it just spawns or destroys `phala_app_instance` resources). Removing the `members` attribute entirely is **not** safe and is also blocked at plan time — destroy and recreate the app.
+
+## Migration from 0.2.x
+
+The `replicas` attribute was removed in 0.3.0. Any HCL setting `replicas` will fail validation. To migrate a multi-replica 0.2.x app, declare the slot names in `members` and add a `phala_app_instance` `for_each` over them. See [CHANGELOG](../../CHANGELOG.md#030---2026-05-18) for the recipe.
 
 {{ .SchemaMarkdown }}

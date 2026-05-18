@@ -1,6 +1,6 @@
 # Terraform Provider Feature Maturity
 
-Last updated: 2026-05-17
+Last updated: 2026-05-18
 
 ## Maturity Levels
 
@@ -12,7 +12,8 @@ Last updated: 2026-05-17
 
 | Component | Level | Status | Notes |
 | --- | --- | --- | --- |
-| `phala_app` | beta | create/read/update/delete + replica scaling | Sole lifecycle resource: shared app-compose + env with N CVM replicas under one app_id. |
+| `phala_app` | beta | create/read/update/delete + bootstrap CVM | App identity + one bootstrap CVM (single-CVM apps), or app identity + per-slot CVMs via `phala_app_instance` (MIG). The legacy anonymous `replicas` field was removed in 0.3.0. |
+| `phala_app_instance` | beta | create/read/delete + adopt-by-name | Stable named slot under an app, keyed by `(app_id, name)`. Adopts the bootstrap CVM when its name matches `phala_app.name`. |
 | resource `phala_app_preflight` | beta | create/read/delete | Computes preflight app metadata, including `compose_hash`, without deploying CVMs. |
 | `phala_cvm_power` | beta | running/stopped state management | Separate action-style power control works; delete is state-only by design. |
 | `phala_ssh_key` | beta | create/read/delete | DO-style key lifecycle. |
@@ -29,8 +30,8 @@ Last updated: 2026-05-17
 
 | Capability | Current |
 | --- | --- |
-| App-first resource + replica scaling | yes (`phala_app.replicas`) |
-| Per-instance app state | yes (`phala_app.instances`) |
+| App-first resource with named slot identities (MIG-style) | yes (`phala_app.members` + `phala_app_instance`) |
+| Per-instance app state | yes (`phala_app.instances`, `phala_app_instance.*`) |
 | Pre-deploy compose hash / app metadata | yes (`phala_app_preflight`) |
 | Separate power resource (`phala_cvm_power`) | yes |
 | Per-deploy SSH key injection | yes |

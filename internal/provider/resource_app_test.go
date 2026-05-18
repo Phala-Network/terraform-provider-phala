@@ -81,7 +81,6 @@ func TestAppResourcePopulateStateKeepsUnmanagedPreLaunchScriptNull(t *testing.T)
 		ID:              types.StringValue("app_test"),
 		DockerCompose:   types.StringNull(),
 		PreLaunchScript: types.StringNull(),
-		Replicas:        types.Int64Null(),
 	}
 	app := &appAPIResponse{
 		AppID: "app_test",
@@ -125,7 +124,6 @@ func TestAppResourcePopulateStateRefreshesManagedPreLaunchScript(t *testing.T) {
 	state := appResourceModel{
 		ID:              types.StringValue("app_test"),
 		PreLaunchScript: types.StringValue("#!/bin/sh\necho old\n"),
-		Replicas:        types.Int64Null(),
 	}
 	app := &appAPIResponse{
 		AppID: "app_test",
@@ -161,7 +159,6 @@ func TestAppResourcePopulateStatePreservesReplicaDerivedFieldsWithoutFreshCVMs(t
 		Endpoint:        types.StringValue("https://example"),
 		PrimaryCVMID:    types.StringValue("cvm-old"),
 		CVMIDs:          cvmIDs,
-		Replicas:        types.Int64Value(2),
 		DockerCompose:   types.StringValue("services:\n  app:\n"),
 		PreLaunchScript: types.StringValue("#!/bin/sh\necho existing\n"),
 	}
@@ -190,9 +187,6 @@ func TestAppResourcePopulateStatePreservesReplicaDerivedFieldsWithoutFreshCVMs(t
 	if state.PrimaryCVMID.ValueString() != "cvm-old" {
 		t.Fatalf("primary_cvm_id should be preserved, got %#v", state.PrimaryCVMID)
 	}
-	if state.Replicas.ValueInt64() != 2 {
-		t.Fatalf("replicas should be preserved, got %#v", state.Replicas)
-	}
 	if state.CVMIDs.IsNull() || state.CVMIDs.IsUnknown() {
 		t.Fatalf("cvm_ids should be preserved, got %#v", state.CVMIDs)
 	}
@@ -212,7 +206,6 @@ func TestAppResourcePopulateStatePrefersCVMMatchingAppName(t *testing.T) {
 		ID:            types.StringValue("app_test"),
 		AppID:         types.StringValue("app_test"),
 		Name:          types.StringValue("consul-0"),
-		Replicas:      types.Int64Null(),
 		DockerCompose: types.StringValue("services:\n  app:\n"),
 	}
 	app := &appAPIResponse{
@@ -259,7 +252,6 @@ func TestAppResourcePopulateStateBuildsComputedInstances(t *testing.T) {
 	state := appResourceModel{
 		ID:            types.StringValue("app_test"),
 		AppID:         types.StringValue("app_test"),
-		Replicas:      types.Int64Null(),
 		DockerCompose: types.StringValue("services:\n  app:\n"),
 	}
 	app := &appAPIResponse{
@@ -329,7 +321,12 @@ func TestAppResourcePopulateStateBuildsComputedInstances(t *testing.T) {
 	}
 }
 
-func TestAppResourcePopulateStateKeepsReplicaCountInMemberMode(t *testing.T) {
+// TestAppResourcePopulateStateReportsCVMIDsInMembersMode replaces the
+// pre-0.3 "keep legacy replicas at 1 in members mode" test. With the
+// replicas attribute gone, the only post-Read invariant left to check is
+// that cvm_ids reflects every CVM currently attached to the app, including
+// any that phala_app_instance created.
+func TestAppResourcePopulateStateReportsCVMIDsInMembersMode(t *testing.T) {
 	ctx := context.Background()
 	members, memberDiags := types.ListValueFrom(ctx, types.StringType, []string{"consul-0", "consul-1"})
 	if memberDiags.HasError() {
@@ -339,7 +336,6 @@ func TestAppResourcePopulateStateKeepsReplicaCountInMemberMode(t *testing.T) {
 	state := appResourceModel{
 		ID:            types.StringValue("app_test"),
 		AppID:         types.StringValue("app_test"),
-		Replicas:      types.Int64Value(1),
 		Members:       members,
 		DockerCompose: types.StringValue("services:\n  app:\n"),
 	}
@@ -357,11 +353,8 @@ func TestAppResourcePopulateStateKeepsReplicaCountInMemberMode(t *testing.T) {
 	if diags.HasError() {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
-	if state.Replicas.ValueInt64() != 1 {
-		t.Fatalf("member mode should keep legacy replicas at 1, got %#v", state.Replicas)
-	}
 	if state.CVMIDs.IsNull() || state.CVMIDs.IsUnknown() {
-		t.Fatalf("cvm_ids should still reflect physical replicas, got %#v", state.CVMIDs)
+		t.Fatalf("cvm_ids should reflect every CVM, got %#v", state.CVMIDs)
 	}
 	var ids []string
 	diags = state.CVMIDs.ElementsAs(ctx, &ids, false)
@@ -369,7 +362,7 @@ func TestAppResourcePopulateStateKeepsReplicaCountInMemberMode(t *testing.T) {
 		t.Fatalf("decode cvm ids: %v", diags)
 	}
 	if len(ids) != 2 {
-		t.Fatalf("expected 2 physical CVM ids, got %#v", ids)
+		t.Fatalf("expected 2 CVM ids, got %#v", ids)
 	}
 }
 
@@ -470,7 +463,6 @@ func TestAppResourcePopulateStatePrefersComposeFileVisibilityFlags(t *testing.T)
 	}
 	state := appResourceModel{
 		ID:              types.StringValue("app_test"),
-		Replicas:        types.Int64Null(),
 		DockerCompose:   types.StringValue("services:\n  app:\n"),
 		PreLaunchScript: types.StringNull(),
 	}

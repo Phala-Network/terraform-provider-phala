@@ -31,9 +31,8 @@ func TestValidateMembersAndName_NoMembers_NoOp(t *testing.T) {
 
 func TestValidateMembersAndName_HappyPath_BootstrapMatchesMembers(t *testing.T) {
 	plan := appResourceModel{
-		Name:     types.StringValue("consul-0"),
-		Members:  membersList(t, "consul-0", "consul-1", "consul-2"),
-		Replicas: types.Int64Value(1),
+		Name:    types.StringValue("consul-0"),
+		Members: membersList(t, "consul-0", "consul-1", "consul-2"),
 	}
 	diags := validateMembersAndName(context.Background(), plan)
 	if diags.HasError() {
@@ -54,34 +53,6 @@ func TestValidateMembersAndName_NameNotInMembers_HardError(t *testing.T) {
 	combined := diagsToString(diags)
 	if !strings.Contains(combined, "typo-0") || !strings.Contains(combined, "consul-0") {
 		t.Fatalf("expected error to name the bad value and the members list, got:\n%s", combined)
-	}
-}
-
-func TestValidateMembersAndName_ReplicasGreaterThan1_HardError(t *testing.T) {
-	plan := appResourceModel{
-		Name:     types.StringValue("consul-0"),
-		Members:  membersList(t, "consul-0", "consul-1"),
-		Replicas: types.Int64Value(3),
-	}
-	diags := validateMembersAndName(context.Background(), plan)
-	if !diags.HasError() {
-		t.Fatal("expected hard error when replicas > 1 combined with members")
-	}
-	combined := diagsToString(diags)
-	if !strings.Contains(combined, "replicas") {
-		t.Fatalf("expected error to mention replicas, got:\n%s", combined)
-	}
-}
-
-func TestValidateMembersAndName_ReplicasUnset_OK(t *testing.T) {
-	plan := appResourceModel{
-		Name:     types.StringValue("consul-0"),
-		Members:  membersList(t, "consul-0", "consul-1"),
-		Replicas: types.Int64Null(),
-	}
-	diags := validateMembersAndName(context.Background(), plan)
-	if diags.HasError() {
-		t.Fatalf("replicas=null with members should pass; got: %v", diags)
 	}
 }
 
