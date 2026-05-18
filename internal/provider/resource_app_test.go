@@ -175,8 +175,8 @@ func TestAppResourcePopulateStatePreservesReplicaDerivedFieldsWithoutFreshCVMs(t
 	if diags.HasError() {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
-	if state.Name.ValueString() != "renamed" {
-		t.Fatalf("expected app-level fields to refresh, got %q", state.Name.ValueString())
+	if state.Name.ValueString() != "existing" {
+		t.Fatalf("configured name should be preserved, got %q", state.Name.ValueString())
 	}
 	if state.DiskSize.ValueInt64() != 40 {
 		t.Fatalf("disk size should be preserved, got %#v", state.DiskSize)
@@ -203,6 +203,54 @@ func TestAppResourcePopulateStatePreservesReplicaDerivedFieldsWithoutFreshCVMs(t
 	}
 	if len(ids) != 1 || ids[0] != "cvm-old" {
 		t.Fatalf("unexpected cvm ids: %#v", ids)
+	}
+}
+
+func TestAppResourcePopulateStatePrefersCVMMatchingAppName(t *testing.T) {
+	ctx := context.Background()
+	state := appResourceModel{
+		ID:            types.StringValue("app_test"),
+		AppID:         types.StringValue("app_test"),
+		Name:          types.StringValue("consul-0"),
+		Replicas:      types.Int64Null(),
+		DockerCompose: types.StringValue("services:\n  app:\n"),
+	}
+	app := &appAPIResponse{
+		AppID: "app_test",
+		Name:  "consul-1",
+	}
+	cvms := []cvmAPIResponse{
+		{
+			VMUUID: "vm-managed-slot",
+			Name:   "consul-1",
+			Status: "running",
+			Endpoints: []struct {
+				App string `json:"app"`
+			}{{App: "https://managed.example"}},
+		},
+		{
+			VMUUID: "vm-bootstrap",
+			Name:   "consul-0",
+			Status: "running",
+			Endpoints: []struct {
+				App string `json:"app"`
+			}{{App: "https://bootstrap.example"}},
+		},
+	}
+
+	resource := &appResource{}
+	diags := resource.populateState(ctx, &state, app, cvms)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if got := state.PrimaryCVMID.ValueString(); got != "vm-bootstrap" {
+		t.Fatalf("expected primary_cvm_id to prefer app name match, got %q", got)
+	}
+	if got := state.Name.ValueString(); got != "consul-0" {
+		t.Fatalf("expected configured app name to be preserved, got %q", got)
+	}
+	if got := state.Endpoint.ValueString(); got != "https://bootstrap.example" {
+		t.Fatalf("expected primary-derived endpoint from bootstrap CVM, got %q", got)
 	}
 }
 

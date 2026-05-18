@@ -148,9 +148,6 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 	attrs["primary_cvm_id"] = schema.StringAttribute{
 		Computed:            true,
 		MarkdownDescription: "Primary CVM identifier used for app-level patch operations.",
-		PlanModifiers: []planmodifier.String{
-			stringplanmodifier.UseStateForUnknown(),
-		},
 	}
 	attrs["cvm_ids"] = schema.ListAttribute{
 		Computed:            true,
@@ -452,7 +449,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		resp.Diagnostics.AddError("Failed to fetch current app replicas", err.Error())
 		return
 	}
-	primaryCVMID := selectPrimaryIdentifier(plan.PrimaryCVMID, state.PrimaryCVMID, cvms)
+	primaryCVMID := selectPrimaryIdentifier(plan.PrimaryCVMID, state.PrimaryCVMID, cvms, plan.Name.ValueString())
 	if primaryCVMID == "" {
 		resp.Diagnostics.AddError("No app replicas found", "App has no CVMs available for update operations.")
 		return
@@ -980,11 +977,19 @@ func (r *appResource) populateState(
 		state.AppID = types.StringValue(appID)
 	}
 
-	if app.Name != "" {
+	configuredName := ""
+	if !state.Name.IsNull() && !state.Name.IsUnknown() {
+		configuredName = strings.TrimSpace(state.Name.ValueString())
+	}
+	if app.Name != "" && configuredName == "" {
 		state.Name = types.StringValue(app.Name)
 	}
 
-	primary := selectPrimaryCVM(cvms, "")
+	preferredName := configuredName
+	if preferredName == "" && !state.Name.IsNull() && !state.Name.IsUnknown() {
+		preferredName = strings.TrimSpace(state.Name.ValueString())
+	}
+	primary := selectPrimaryCVM(cvms, "", preferredName)
 	if primary != nil {
 		primaryID := selectReplicaIdentifier(*primary)
 		if primaryID != "" && r.client != nil {
@@ -1235,24 +1240,31 @@ func appIDFromState(state appResourceModel) string {
 	return ""
 }
 
-func selectPrimaryIdentifier(planPrimary, statePrimary types.String, cvms []cvmAPIResponse) string {
+func selectPrimaryIdentifier(planPrimary, statePrimary types.String, cvms []cvmAPIResponse, preferredName string) string {
 	if !planPrimary.IsNull() && !planPrimary.IsUnknown() && strings.TrimSpace(planPrimary.ValueString()) != "" {
 		return planPrimary.ValueString()
 	}
 	if !statePrimary.IsNull() && !statePrimary.IsUnknown() && strings.TrimSpace(statePrimary.ValueString()) != "" {
 		return statePrimary.ValueString()
 	}
-	primary := selectPrimaryCVM(cvms, "")
+	primary := selectPrimaryCVM(cvms, "", preferredName)
 	if primary == nil {
 		return ""
 	}
 	return selectReplicaIdentifier(*primary)
 }
 
-func selectPrimaryCVM(cvms []cvmAPIResponse, preferredSourceVMUUID string) *cvmAPIResponse {
+func selectPrimaryCVM(cvms []cvmAPIResponse, preferredSourceVMUUID string, preferredName string) *cvmAPIResponse {
 	if preferredSourceVMUUID != "" {
 		for i := range cvms {
 			if strings.EqualFold(strings.TrimSpace(cvms[i].VMUUID), strings.TrimSpace(preferredSourceVMUUID)) {
+				return &cvms[i]
+			}
+		}
+	}
+	if strings.TrimSpace(preferredName) != "" {
+		for i := range cvms {
+			if strings.EqualFold(strings.TrimSpace(cvms[i].Name), strings.TrimSpace(preferredName)) {
 				return &cvms[i]
 			}
 		}
