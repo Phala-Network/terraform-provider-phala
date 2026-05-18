@@ -139,6 +139,7 @@ func (p *phalaProvider) DataSources(_ context.Context) []func() datasource.DataS
 func (p *phalaProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewAppResource,
+		NewAppInstanceResource,
 		NewAppPreflightResource,
 		NewCVMPowerResource,
 		NewSSHKeyResource,

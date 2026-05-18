@@ -63,6 +63,7 @@ type appResourceModel struct {
 	CVMIDs             types.List   `tfsdk:"cvm_ids"`
 	Instances          types.List   `tfsdk:"instances"`
 	Endpoint           types.String `tfsdk:"endpoint"`
+	Members            types.List   `tfsdk:"members"`
 }
 
 type appInstanceModel struct {
@@ -173,6 +174,15 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			},
 		},
 	}
+	attrs["members"] = schema.ListAttribute{
+		Optional:    true,
+		ElementType: types.StringType,
+		MarkdownDescription: "Optional list of stable slot names this app's replica set is composed of (MIG-style usage). " +
+			"When set, `name` must be one of these values, and `replicas` must be unset or 1 — the " +
+			"legacy anonymous-replica path is incompatible with named slots. Downstream " +
+			"`phala_app_instance` resources should derive their `for_each` from this attribute so the " +
+			"slot list is the single source of truth.",
+	}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a Phala Cloud App (app_id + shared compose/env + replica count).",
 		Attributes:          attrs,
@@ -191,6 +201,11 @@ func (r *appResource) Configure(_ context.Context, req resource.ConfigureRequest
 func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan appResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(validateMembersAndName(ctx, plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -365,6 +380,11 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	var state appResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(validateMembersAndName(ctx, plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -1092,6 +1112,77 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// validateMembersAndName enforces the MIG-mode invariants for phala_app:
+//
+//  1. If `members` is set, `name` must be one of `members` — otherwise the
+//     bootstrap CVM has nothing to adopt it and becomes an unreferenced extra.
+//  2. If `members` is set, `replicas` must be unset, unknown, or exactly 1.
+//     The legacy /cvms/{src}/replicas path creates anonymous duplicates that
+//     collide with named slots; mixing the two yields confusing CVM lists.
+//
+// Returns Terraform diagnostics; callers should bail if any error is added.
+func validateMembersAndName(ctx context.Context, plan appResourceModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if plan.Members.IsNull() || plan.Members.IsUnknown() {
+		return diags
+	}
+	members, listDiags := listValueAsStrings(ctx, plan.Members, "members")
+	diags.Append(listDiags...)
+	if diags.HasError() {
+		return diags
+	}
+	if len(members) == 0 {
+		diags.AddAttributeError(
+			path.Root("members"),
+			"Invalid members",
+			"members must be a non-empty list of slot names when set.",
+		)
+		return diags
+	}
+
+	if plan.Name.IsNull() || plan.Name.IsUnknown() {
+		diags.AddAttributeError(
+			path.Root("name"),
+			"Missing name for MIG mode",
+			"name must be known at apply time and must equal one of the values in members.",
+		)
+		return diags
+	}
+	planName := strings.TrimSpace(plan.Name.ValueString())
+	memberSet := make(map[string]struct{}, len(members))
+	for _, m := range members {
+		memberSet[m] = struct{}{}
+	}
+	if _, ok := memberSet[planName]; !ok {
+		diags.AddAttributeError(
+			path.Root("name"),
+			"name must be one of members",
+			fmt.Sprintf(
+				"phala_app.name = %q but is not in members = %v. "+
+					"In MIG mode the app's bootstrap CVM must match one of the declared slot names — "+
+					"otherwise it becomes an unreferenced extra. Set name to one of the members "+
+					"(typically members[0]).",
+				planName, members,
+			),
+		)
+	}
+
+	if !plan.Replicas.IsNull() && !plan.Replicas.IsUnknown() && plan.Replicas.ValueInt64() > 1 {
+		diags.AddAttributeError(
+			path.Root("replicas"),
+			"replicas incompatible with members",
+			fmt.Sprintf(
+				"phala_app.replicas = %d but members is set (MIG mode). The legacy anonymous-replica "+
+					"path conflicts with named slots — leave replicas unset (or set it to 1) and declare "+
+					"additional slots via phala_app_instance with for_each over members.",
+				plan.Replicas.ValueInt64(),
+			),
+		)
+	}
+
+	return diags
 }
 
 func desiredReplicaCount(v types.Int64) (int, diag.Diagnostics) {

@@ -4,6 +4,13 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- New `phala_app_instance` resource keyed by `(app_id, name)` that maps a Terraform resource to a stable logical member of a replica set. Backed by `POST /apps/{app_id}/instances` with a custom CVM name (phala-cloud-monorepo#1386). The slot survives CVM replacement: `vm_uuid` is computed and refreshes on Read, while `name` is operator-chosen and immutable (forces replace).
+- `phala_app_instance` adopts the bootstrap CVM owned by `phala_app` when the names match, so MIG-style replica sets can be declared with a single symmetric `for_each` over all slot names. Adopted instances expose `managed = false` and skip the cloud DELETE on destroy; created instances have `managed = true` and own the CVM lifecycle.
+- New optional `members` list on `phala_app` declares the full slot list for MIG-style usage. When set, the provider validates at plan time that `name` is one of `members` and that `replicas` is unset or 1 — catching the typo and mis-mode footguns. Downstream `phala_app_instance` resources should use `for_each = toset(phala_app.foo.members)` to keep the slot list a single source of truth.
+- Design note `docs/design-notes/cvm-rename-endpoint.md` capturing the verified shape of `PATCH /cvms/{cvm_id}/name` for future reference (recovery tooling, CLI parity).
+
 ## [0.2.0-beta.4] - 2026-05-17
 
 ### Added

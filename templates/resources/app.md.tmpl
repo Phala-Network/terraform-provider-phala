@@ -16,10 +16,20 @@ description: |-
 ## Behavior Notes
 
 - `phala_app` is the main lifecycle resource for Phala Cloud deployments.
-- `replicas` scales one app definition horizontally across multiple CVMs.
+- `replicas` scales one app definition horizontally across multiple **anonymous** CVMs (all share the parent app's name). Use for stateless replica sets.
+- For stateful replica sets with stable per-member identity (Consul, Patroni, etcd, Kafka, etc.), declare `members` and pair `phala_app` with `phala_app_instance`. See [`phala_app_instance`](app_instance.md) for the full MIG-style pattern.
 - `docker_compose`, runtime visibility flags, and encrypted environment updates are applied across the app.
 - `instances` exposes the current per-CVM member view without introducing backend-native ordinals.
 - `wait_for_ready = true` waits until the app reports running replicas before returning.
 - `ssh_authorized_keys`, `storage_fs`, placement fields, and deterministic identity inputs can affect replacement behavior; check the schema details below before changing them in-place.
+
+## MIG-mode validation
+
+When `members` is set, the provider enforces two invariants at plan time:
+
+1. `name` must be one of `members` — otherwise the bootstrap CVM has nothing to adopt it and would become an unreferenced extra under the app.
+2. `replicas` must be unset or exactly 1 — the legacy anonymous-replica path (`/cvms/{src}/replicas`) conflicts with named slots and would silently create unnamed duplicates.
+
+Downstream `phala_app_instance` resources should set `for_each = toset(phala_app.foo.members)` so the slot list stays a single source of truth.
 
 {{ .SchemaMarkdown }}
