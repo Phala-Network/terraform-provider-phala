@@ -23,6 +23,7 @@ import (
 
 var _ resource.Resource = &appResource{}
 var _ resource.ResourceWithImportState = &appResource{}
+var _ resource.ResourceWithValidateConfig = &appResource{}
 
 type appResource struct {
 	client *APIClient
@@ -196,6 +197,17 @@ func (r *appResource) Configure(_ context.Context, req resource.ConfigureRequest
 	if client, ok := req.ProviderData.(*APIClient); ok {
 		r.client = client
 	}
+}
+
+// ValidateConfig surfaces the MIG-mode invariants at plan time so users see
+// errors before any cloud API calls are made.
+func (r *appResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var cfg appResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(validateMembersAndName(ctx, cfg)...)
 }
 
 func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
