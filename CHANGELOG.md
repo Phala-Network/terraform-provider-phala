@@ -4,6 +4,27 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0-beta.2] - 2026-05-19
+
+In-place updates work in members (MIG) mode for all the fields users actually edit. The release-blocking guardrail from 0.3.0-beta.1 is gone.
+
+### Added
+
+- `phala_app.Update` now propagates changes across every CVM in a members-mode app, preserving slot identity (`vm_uuid` and `name` are unchanged across the update):
+  - **Compose-body changes** (`docker_compose`, `pre_launch_script`, `public_logs`, `public_sysinfo`, `public_tcbinfo`, `gateway_enabled`, `secure_time`, env-key list) flow through the cloud's app-revision endpoint: provision + apply on the bootstrap CVM (which creates the revision row), then `POST /apps/{id}/revisions/{rev}/redeploy` with `vm_uuids = [other slots]`. Verified end-to-end on a 2-slot MIG: bootstrap update + slot redeploy lands the new `compose_hash` on every CVM with both `vm_uuid`s preserved.
+  - **Env value changes** (the common "rotate a secret" case) use a per-CVM `PATCH /cvms/{uuid}/envs` fan-out across every slot. The app-rooted KMS public key is shared across all CVMs in one app, so the same encrypted_env bytes are accepted by every slot. `compose_hash` stays unchanged (no new revision).
+  - **OS image changes** (`image`) fan out per-CVM via `PATCH /cvms/{uuid}/os-image` — the cloud has no app-level analog. Sequential, fail-fast.
+  - **Size / disk_size changes** fan out per-CVM via `PATCH /cvms/{uuid}/resources`. Same pattern.
+
+### Changed
+
+- `ModifyPlan` no longer blocks app-level mutable-field updates in members mode. The only structural check kept is the "cannot leave members mode in-place" guard, which still requires destroy + recreate when a user removes the `members` attribute from a previously-members-mode app.
+- Single-CVM apps (no `members`) follow the same single-CVM update path as before — PATCHes target the bootstrap directly with no fan-out machinery. Zero behavior change for that case.
+
+### Fixed
+
+- The members-mode guardrail's diagnostic message previously suggested workarounds (destroy+recreate, per-slot env) that are no longer needed for `docker_compose` / `env` / `image` / `size` / `disk_size`. Those workarounds were obsolete the moment we wired up the revision and fan-out paths; the message is gone with the guardrail.
+
 ## [0.3.0-beta.1] - 2026-05-18
 
 First prerelease of the 0.3 line. The provider's model collapses to:

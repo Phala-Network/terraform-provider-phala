@@ -46,6 +46,13 @@ type cvmAPIResponse struct {
 	InstanceType string `json:"instance_type"`
 	DiskSize     *int64 `json:"disk_size"`
 
+	// ComposeHash is the SHA-256 of the canonical app compose body the
+	// cloud believes this CVM is currently running. After the redeploy
+	// fan-out, each CVM's `compose_hash` flips from the old revision's
+	// value to the new one — used by waitForCVMsOnComposeHash to detect
+	// completion of the async update.
+	ComposeHash string `json:"compose_hash"`
+
 	Progress *struct {
 		Target string `json:"target"`
 	} `json:"progress"`

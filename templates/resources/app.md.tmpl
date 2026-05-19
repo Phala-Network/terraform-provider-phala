@@ -28,17 +28,15 @@ When `members` is set, the provider enforces at plan time that `name` is one of 
 
 Downstream `phala_app_instance` resources should set `for_each = toset(phala_app.foo.members)` so the slot list stays a single source of truth.
 
-## In-place updates are blocked in members mode
+## In-place updates in members mode
 
-The cloud's per-CVM PATCH endpoints (`/cvms/{id}/docker-compose`, `/envs`, `/os-image`, `/resources`, `/compose_file/provision`) only target a single CVM. Applying them through `phala_app` in members mode would mutate the bootstrap slot and leave every `phala_app_instance` slot on the old revision — divergent compose/env/image across the replica set. Until the cloud exposes an app-revision-aware update endpoint that preserves all named slots, this provider refuses at plan time to update any of these `phala_app` fields when `members` is set:
+`phala_app.Update` propagates mutable-field changes across every CVM in a members-mode app while preserving slot identity (`vm_uuid` and `name` are unchanged):
 
-`docker_compose`, `pre_launch_script`, `env`, `encrypted_env`, `env_keys`, `env_compose_hash`, `env_transaction_hash`, `image`, `size`, `disk_size`, `public_logs`, `public_sysinfo`, `public_tcbinfo`, `gateway_enabled`, `secure_time`.
+- **Compose-body changes** (`docker_compose`, `pre_launch_script`, `public_*`, `gateway_enabled`, `secure_time`, env-key list changes) go through the cloud's app-revision endpoint. The provider provisions + applies on the bootstrap CVM (creating a new revision row), then `POST /apps/{id}/revisions/{rev}/redeploy` fans the same revision out to every other slot. Each CVM's `compose_hash` flips to the new value; nothing is destroyed and recreated.
+- **Env value changes** (the common "rotate a secret" case) use a per-CVM `PATCH /cvms/{uuid}/envs` fan-out. The app-rooted KMS public key is shared across all slots, so the same encrypted_env bytes are accepted by every slot. `compose_hash` stays unchanged (no new revision).
+- **OS image, instance size, and disk size changes** fan out via `PATCH /cvms/{uuid}/os-image` and `PATCH /cvms/{uuid}/resources` respectively — the cloud has no app-level analog. Sequential, fail-fast.
 
-Workarounds:
-1. Destroy the `phala_app` + matching `phala_app_instance` resources and recreate them with the new compose / env / image.
-2. Move per-slot variations to `phala_app_instance.env` (per-slot encrypted env at create time; immutable thereafter).
-
-Adding or removing entries from `members` is still safe (it just spawns or destroys `phala_app_instance` resources). Removing the `members` attribute entirely is **not** safe and is also blocked at plan time — destroy and recreate the app.
+The one structural change still blocked is **removing the `members` attribute** from a previously-members-mode app: that would leave the `phala_app_instance` slots orphaned. The provider blocks this at plan time and asks you to destroy and recreate.
 
 ## Migration from 0.2.x
 
