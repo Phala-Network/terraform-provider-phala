@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -18,7 +19,7 @@ import (
 var _ resource.Resource = &cvmPowerResource{}
 
 type cvmPowerResource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type cvmPowerResourceModel struct {
@@ -85,11 +86,11 @@ func (r *cvmPowerResource) Configure(_ context.Context, req resource.ConfigureRe
 		return
 	}
 
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring cvm_power resource.",
+			"Expected *phala.Client while configuring cvm_power resource.",
 		)
 		return
 	}
@@ -227,7 +228,7 @@ func (r *cvmPowerResource) ensureDesiredPowerState(
 	ctx context.Context,
 	cvmID string,
 	desired string,
-) (*cvmAPIResponse, error) {
+) (*phala.CVMInfo, error) {
 	current, err := r.fetchPowerTarget(ctx, cvmID)
 	if err != nil {
 		return nil, err
@@ -236,14 +237,14 @@ func (r *cvmPowerResource) ensureDesiredPowerState(
 	switch desired {
 	case "running":
 		if shouldStart(current.Status) {
-			if err := r.client.PostJSON(ctx, cvmPath(cvmID)+"/start", map[string]any{"polling": "v1"}, nil); err != nil {
+			if _, err := r.client.StartCVM(ctx, cvmID); err != nil {
 				return nil, err
 			}
 			return r.fetchPowerTarget(ctx, cvmID)
 		}
 	case "stopped":
 		if shouldStop(current.Status) {
-			if err := r.client.PostJSON(ctx, cvmPath(cvmID)+"/stop", map[string]any{"polling": "v1"}, nil); err != nil {
+			if _, err := r.client.StopCVM(ctx, cvmID); err != nil {
 				return nil, err
 			}
 			return r.fetchPowerTarget(ctx, cvmID)
@@ -255,12 +256,8 @@ func (r *cvmPowerResource) ensureDesiredPowerState(
 	return current, nil
 }
 
-func (r *cvmPowerResource) fetchPowerTarget(ctx context.Context, id string) (*cvmAPIResponse, error) {
-	var out cvmAPIResponse
-	if err := r.client.GetJSON(ctx, cvmPath(id), &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
+func (r *cvmPowerResource) fetchPowerTarget(ctx context.Context, id string) (*phala.CVMInfo, error) {
+	return r.client.GetCVMInfo(ctx, id)
 }
 
 func (r *cvmPowerResource) waitForPowerState(
@@ -284,7 +281,7 @@ func (r *cvmPowerResource) waitForPowerState(
 			return err
 		}
 
-		if stablePowerState(current.Status) == target && !current.inProgress() {
+		if stablePowerState(current.Status) == target && !cvmInfoInProgress(current) {
 			return nil
 		}
 

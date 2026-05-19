@@ -36,5 +36,3 @@ resource "phala_ssh_key" "laptop" {
 - `key_type` (String) Key type (e.g. ssh-ed25519, ssh-rsa).
 - `source` (String) Key source metadata reported by API.
 - `updated_at` (String) Last update timestamp.
-
-

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -52,19 +53,19 @@ func TestValidateInstanceName(t *testing.T) {
 }
 
 func TestFindInstanceByName(t *testing.T) {
-	cvms := []cvmAPIResponse{
-		{VMUUID: "vm-aaa", Name: "consul-0"},
-		{VMUUID: "vm-bbb", Name: "consul-1"},
-		{VMUUID: "vm-ccc", Name: "Consul-2"}, // case-insensitive
+	cvms := []phala.CVMInfo{
+		{VMUUID: strPtr("vm-aaa"), Name: "consul-0"},
+		{VMUUID: strPtr("vm-bbb"), Name: "consul-1"},
+		{VMUUID: strPtr("vm-ccc"), Name: "Consul-2"}, // case-insensitive
 	}
 
 	match := findInstanceByName(cvms, "consul-1")
-	if match == nil || match.VMUUID != "vm-bbb" {
+	if match == nil || cvmInfoVMUUID(match) != "vm-bbb" {
 		t.Fatalf("expected vm-bbb, got %#v", match)
 	}
 
 	match = findInstanceByName(cvms, "consul-2")
-	if match == nil || match.VMUUID != "vm-ccc" {
+	if match == nil || cvmInfoVMUUID(match) != "vm-ccc" {
 		t.Fatalf("case-insensitive lookup failed: %#v", match)
 	}
 
@@ -77,38 +78,36 @@ func TestFindInstanceByName(t *testing.T) {
 }
 
 func TestMergeCVMResponseFillsEmptyFields(t *testing.T) {
-	base := cvmAPIResponse{
-		VMUUID: "vm-aaa",
+	base := phala.CVMInfo{
+		VMUUID: strPtr("vm-aaa"),
 	}
-	extra := cvmAPIResponse{
-		VMUUID:     "vm-aaa",
+	extra := phala.CVMInfo{
+		VMUUID:     strPtr("vm-aaa"),
 		Name:       "consul-0",
 		Status:     "running",
-		AppID:      "app_123",
-		InstanceID: "inst-1",
-		CreatedAt:  "2026-05-18T00:00:00Z",
-		NodeInfo: &struct {
-			Region string `json:"region"`
-		}{Region: "us-east"},
+		AppID:      strPtr("app_123"),
+		InstanceID: strPtr("inst-1"),
+		CreatedAt:  strPtr("2026-05-18T00:00:00Z"),
+		NodeInfo:   &phala.NodeRef{Region: strPtr("us-east")},
 	}
 	merged := mergeCVMResponse(base, extra)
 
-	if merged.Name != "consul-0" || merged.Status != "running" || merged.AppID != "app_123" {
+	if merged.Name != "consul-0" || merged.Status != "running" || cvmInfoAppID(&merged) != "app_123" {
 		t.Fatalf("expected fields filled from extra, got %#v", merged)
 	}
-	if merged.region() != "us-east" {
-		t.Fatalf("expected region filled from extra, got %q", merged.region())
+	if cvmInfoRegion(&merged) != "us-east" {
+		t.Fatalf("expected region filled from extra, got %q", cvmInfoRegion(&merged))
 	}
 }
 
 func TestMergeCVMResponsePreservesStableBaseValuesAndRefreshesStatus(t *testing.T) {
-	base := cvmAPIResponse{
-		VMUUID: "vm-aaa",
+	base := phala.CVMInfo{
+		VMUUID: strPtr("vm-aaa"),
 		Name:   "consul-0",
 		Status: "starting",
 	}
-	extra := cvmAPIResponse{
-		VMUUID:     "vm-aaa",
+	extra := phala.CVMInfo{
+		VMUUID:     strPtr("vm-aaa"),
 		Name:       "should-not-overwrite",
 		Status:     "running",
 		InProgress: false,
@@ -126,25 +125,15 @@ func TestPopulateAppInstanceState(t *testing.T) {
 	state := appInstanceResourceModel{}
 	baseDomain := "dstack-pha-prod5.phala.network"
 	cname := "demo.example.com"
-	cvm := cvmAPIResponse{
-		VMUUID:     "vm-aaa",
-		InstanceID: "inst-1",
+	cvm := phala.CVMInfo{
+		VMUUID:     strPtr("vm-aaa"),
+		InstanceID: strPtr("inst-1"),
 		Status:     "running",
-		CreatedAt:  "2026-05-18T00:00:00Z",
-		Resource: &struct {
-			InstanceType string `json:"instance_type"`
-			DiskInGB     *int64 `json:"disk_in_gb"`
-		}{InstanceType: "tdx.small"},
-		NodeInfo: &struct {
-			Region string `json:"region"`
-		}{Region: "us-east"},
-		Endpoints: []struct {
-			App string `json:"app"`
-		}{{App: "https://example.com"}},
-		Gateway: &struct {
-			BaseDomain *string `json:"base_domain"`
-			Cname      *string `json:"cname"`
-		}{BaseDomain: &baseDomain, Cname: &cname},
+		CreatedAt:  strPtr("2026-05-18T00:00:00Z"),
+		Resource:   phala.CvmResource{InstanceType: strPtr("tdx.small")},
+		NodeInfo:   &phala.NodeRef{Region: strPtr("us-east")},
+		Endpoints:  []phala.CVMEndpoint{{App: "https://example.com"}},
+		Gateway:    &phala.CvmGatewayInfo{BaseDomain: &baseDomain, CNAME: &cname},
 	}
 	populateAppInstanceState(&state, "app_test", "consul-0", cvm)
 
@@ -177,46 +166,37 @@ func TestPopulateAppInstanceState(t *testing.T) {
 	}
 }
 
-// TestGatewayHelpersMissingFields covers the partial-response cases where
-// the cloud omits the gateway block or one of its members, which downstream
-// callers rely on (we must return "" rather than panicking on nil deref).
+// TestGatewayHelpersMissingFields covers the partial-response cases
+// where the cloud omits the gateway block or one of its members, which
+// downstream callers rely on (we must return "" rather than panicking
+// on nil deref).
 func TestGatewayHelpersMissingFields(t *testing.T) {
 	// No gateway block at all.
-	r := cvmAPIResponse{}
-	if got := r.gatewayBaseDomain(); got != "" {
+	r := &phala.CVMInfo{}
+	if got := cvmInfoGatewayBaseDomain(r); got != "" {
 		t.Fatalf("nil gateway base_domain should be empty, got %q", got)
 	}
-	if got := r.gatewayCname(); got != "" {
+	if got := cvmInfoGatewayCname(r); got != "" {
 		t.Fatalf("nil gateway cname should be empty, got %q", got)
 	}
 
 	// Gateway present, both members nil.
-	r = cvmAPIResponse{
-		Gateway: &struct {
-			BaseDomain *string `json:"base_domain"`
-			Cname      *string `json:"cname"`
-		}{},
-	}
-	if got := r.gatewayBaseDomain(); got != "" {
+	r = &phala.CVMInfo{Gateway: &phala.CvmGatewayInfo{}}
+	if got := cvmInfoGatewayBaseDomain(r); got != "" {
 		t.Fatalf("nil base_domain pointer should be empty, got %q", got)
 	}
-	if got := r.gatewayCname(); got != "" {
+	if got := cvmInfoGatewayCname(r); got != "" {
 		t.Fatalf("nil cname pointer should be empty, got %q", got)
 	}
 
 	// Whitespace must be trimmed.
 	bd := "  dstack-pha-prod5.phala.network  "
 	cn := "  demo.example.com  "
-	r = cvmAPIResponse{
-		Gateway: &struct {
-			BaseDomain *string `json:"base_domain"`
-			Cname      *string `json:"cname"`
-		}{BaseDomain: &bd, Cname: &cn},
-	}
-	if got := r.gatewayBaseDomain(); got != "dstack-pha-prod5.phala.network" {
+	r = &phala.CVMInfo{Gateway: &phala.CvmGatewayInfo{BaseDomain: &bd, CNAME: &cn}}
+	if got := cvmInfoGatewayBaseDomain(r); got != "dstack-pha-prod5.phala.network" {
 		t.Fatalf("base_domain not trimmed: %q", got)
 	}
-	if got := r.gatewayCname(); got != "demo.example.com" {
+	if got := cvmInfoGatewayCname(r); got != "demo.example.com" {
 		t.Fatalf("cname not trimmed: %q", got)
 	}
 }
@@ -257,7 +237,7 @@ func TestAppInstanceCreatePostsNameAndPollsForReady(t *testing.T) {
 	defer srv.Close()
 
 	r := &appInstanceResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 
 	plan := appInstanceResourceModel{
@@ -269,14 +249,14 @@ func TestAppInstanceCreatePostsNameAndPollsForReady(t *testing.T) {
 
 	appID := ensureAppPrefix(plan.AppID.ValueString())
 	name := plan.Name.ValueString()
-	body := createAppInstanceRequest{Name: name}
+	body := &phala.CreateAppInstanceRequest{Name: &name}
 
-	var created cvmAPIResponse
-	if err := r.client.PostJSON(context.Background(), appPath(appID)+"/instances", body, &created); err != nil {
+	created, err := r.client.CreateAppInstance(context.Background(), appIDWithoutPrefix(appID), body)
+	if err != nil {
 		t.Fatalf("create POST failed: %v", err)
 	}
 
-	if created.VMUUID != "vm-new" || created.Name != "consul-1" {
+	if cvmInfoVMUUID(created) != "vm-new" || created.Name != "consul-1" {
 		t.Fatalf("unexpected create response: %#v", created)
 	}
 
@@ -285,8 +265,8 @@ func TestAppInstanceCreatePostsNameAndPollsForReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("waitForInstance failed: %v", err)
 	}
-	if resolved.VMUUID != "vm-new" {
-		t.Fatalf("unexpected resolved vm_uuid: %q", resolved.VMUUID)
+	if cvmInfoVMUUID(&resolved) != "vm-new" {
+		t.Fatalf("unexpected resolved vm_uuid: %q", cvmInfoVMUUID(&resolved))
 	}
 
 	ready, err := r.waitForInstanceRunning(context.Background(), appID, name, deadline)
@@ -308,7 +288,7 @@ func TestAppInstanceCreatePostsNameAndPollsForReady(t *testing.T) {
 	}
 
 	// Populate state and check the durable ID.
-	merged := mergeCVMResponse(created, ready)
+	merged := mergeCVMResponse(*created, ready)
 	state := appInstanceResourceModel{}
 	populateAppInstanceState(&state, appID, name, merged)
 	if state.ID.ValueString() != "app_test:consul-1" {
@@ -346,7 +326,7 @@ func TestAppInstanceAutoEnvEncryptsCreatePayload(t *testing.T) {
 	defer srv.Close()
 
 	r := &appInstanceResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 
 	env, diags := types.MapValueFrom(context.Background(), types.StringType, map[string]string{
@@ -380,17 +360,17 @@ func TestAppInstanceAutoEnvEncryptsCreatePayload(t *testing.T) {
 		t.Fatalf("encrypt auto env: %v", err)
 	}
 
-	body := createAppInstanceRequest{Name: "consul-1"}
+	name := "consul-1"
+	body := &phala.CreateAppInstanceRequest{Name: &name}
 	if envCfg.HasEffectiveEncrypted {
 		body.EncryptedEnv = &envCfg.EffectiveEncrypted
 	}
-	var created cvmAPIResponse
-	if err := r.client.PostJSON(context.Background(), appPath("app_test")+"/instances", body, &created); err != nil {
+	if _, err := r.client.CreateAppInstance(context.Background(), "test", body); err != nil {
 		t.Fatalf("create POST failed: %v", err)
 	}
 
 	raw := capturedBody.Load().([]byte)
-	var got createAppInstanceRequest
+	var got phala.CreateAppInstanceRequest
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("decode posted body: %v", err)
 	}
@@ -421,7 +401,7 @@ func TestAppInstanceReadResolvesCurrentVMUUIDBySlotName(t *testing.T) {
 	defer srv.Close()
 
 	r := &appInstanceResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 	cvms, err := r.fetchAppCVMs(context.Background(), "app_test")
 	if err != nil {
@@ -431,8 +411,8 @@ func TestAppInstanceReadResolvesCurrentVMUUIDBySlotName(t *testing.T) {
 	if match == nil {
 		t.Fatal("expected to find consul-1 by name")
 	}
-	if match.VMUUID != "vm-new-after-replace" {
-		t.Fatalf("Read should resolve the *current* vm_uuid for the slot, got %q", match.VMUUID)
+	if cvmInfoVMUUID(match) != "vm-new-after-replace" {
+		t.Fatalf("Read should resolve the *current* vm_uuid for the slot, got %q", cvmInfoVMUUID(match))
 	}
 }
 
@@ -450,7 +430,7 @@ func TestAppInstanceReadRemovesStateWhenSlotMissing(t *testing.T) {
 	defer srv.Close()
 
 	r := &appInstanceResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 	cvms, err := r.fetchAppCVMs(context.Background(), "app_test")
 	if err != nil {
@@ -474,15 +454,15 @@ func TestAppInstanceCreate465ReportsClearError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second)
-	var out cvmAPIResponse
-	err := client.PostJSON(context.Background(), "/apps/test/instances", createAppInstanceRequest{Name: "consul-1"}, &out)
+	client := newTestPhalaClient(t, srv.URL+"/api/v1")
+	name := "consul-1"
+	_, err := client.CreateAppInstance(context.Background(), "test", &phala.CreateAppInstanceRequest{Name: &name})
 	if err == nil {
 		t.Fatal("expected an error from 465 response")
 	}
-	apiErr, ok := err.(*APIError)
+	apiErr, ok := err.(*phala.APIError)
 	if !ok {
-		t.Fatalf("expected *APIError, got %T: %v", err, err)
+		t.Fatalf("expected *phala.APIError, got %T: %v", err, err)
 	}
 	if apiErr.StatusCode != 465 {
 		t.Fatalf("expected 465, got %d", apiErr.StatusCode)
@@ -510,7 +490,7 @@ func TestAppInstanceDeleteResolvesByNameIfVMUUIDMissing(t *testing.T) {
 	defer srv.Close()
 
 	r := &appInstanceResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 
 	cvms, err := r.fetchAppCVMs(context.Background(), "app_test")
@@ -521,7 +501,7 @@ func TestAppInstanceDeleteResolvesByNameIfVMUUIDMissing(t *testing.T) {
 	if match == nil {
 		t.Fatal("expected slot to be found")
 	}
-	if err := r.client.Delete(context.Background(), cvmPath(selectReplicaIdentifier(*match))); err != nil {
+	if err := r.client.DeleteCVM(context.Background(), selectReplicaIdentifier(*match)); err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
 	if got := deletedPath.Load().(string); got != "/api/v1/cvms/vm-zzz" {
@@ -544,7 +524,7 @@ func TestAppInstanceFindExistingByNameReturnsMatch(t *testing.T) {
 	defer srv.Close()
 
 	r := &appInstanceResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 
 	got, ok, err := r.findExistingByName(context.Background(), "app_test", "consul-0")
@@ -554,8 +534,8 @@ func TestAppInstanceFindExistingByNameReturnsMatch(t *testing.T) {
 	if !ok {
 		t.Fatal("expected match=true for existing bootstrap CVM")
 	}
-	if got.VMUUID != "vm-bootstrap" {
-		t.Fatalf("unexpected vm_uuid: %q", got.VMUUID)
+	if cvmInfoVMUUID(&got) != "vm-bootstrap" {
+		t.Fatalf("unexpected vm_uuid: %q", cvmInfoVMUUID(&got))
 	}
 }
 
@@ -573,7 +553,7 @@ func TestAppInstanceFindExistingByNameReturnsMissForUnknownName(t *testing.T) {
 	defer srv.Close()
 
 	r := &appInstanceResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 
 	_, ok, err := r.findExistingByName(context.Background(), "app_test", "consul-1")
@@ -597,7 +577,7 @@ func TestAppInstanceFindExistingByName404IsTreatedAsNoMatch(t *testing.T) {
 	defer srv.Close()
 
 	r := &appInstanceResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 
 	_, ok, err := r.findExistingByName(context.Background(), "app_missing", "consul-0")
@@ -639,9 +619,9 @@ func TestAppInstanceDeleteSkipsCloudWhenUnmanaged(t *testing.T) {
 		return
 	}
 	r := &appInstanceResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
-	_ = r.client.Delete(context.Background(), cvmPath(state.VMUUID.ValueString()))
+	_ = r.client.DeleteCVM(context.Background(), state.VMUUID.ValueString())
 }
 
 // TestAppInstanceDeleteCallsCloudWhenManaged is the inverse — managed
@@ -671,9 +651,9 @@ func TestAppInstanceDeleteCallsCloudWhenManaged(t *testing.T) {
 	}
 
 	r := &appInstanceResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
-	if err := r.client.Delete(context.Background(), cvmPath(state.VMUUID.ValueString())); err != nil {
+	if err := r.client.DeleteCVM(context.Background(), state.VMUUID.ValueString()); err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
 	if got, _ := deletedPath.Load().(string); got != "/api/v1/cvms/vm-created" {

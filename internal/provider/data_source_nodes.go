@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -14,7 +15,7 @@ import (
 var _ datasource.DataSource = &nodesDataSource{}
 
 type nodesDataSource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type nodesDataSourceModel struct {
@@ -90,11 +91,11 @@ func (d *nodesDataSource) Configure(_ context.Context, req datasource.ConfigureR
 		return
 	}
 
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring nodes data source.",
+			"Expected *phala.Client while configuring nodes data source.",
 		)
 		return
 	}
@@ -133,47 +134,23 @@ func (d *nodesDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		wantOnchain = config.SupportOnchainKMS.ValueBool()
 	}
 
-	var payload struct {
-		Nodes []struct {
-			TeepodID          *int64   `json:"teepod_id"`
-			ID                *int64   `json:"id"`
-			Name              string   `json:"name"`
-			Listed            *bool    `json:"listed"`
-			ResourceScore     *float64 `json:"resource_score"`
-			RemainingVCPU     *float64 `json:"remaining_vcpu"`
-			RemainingMemory   *float64 `json:"remaining_memory"`
-			RemainingCVMSlots *float64 `json:"remaining_cvm_slots"`
-			RegionIdentifier  string   `json:"region_identifier"`
-			SupportOnchainKMS *bool    `json:"support_onchain_kms"`
-			FMSPC             *string  `json:"fmspc"`
-			DeviceID          *string  `json:"device_id"`
-			Images            []struct {
-				Name string `json:"name"`
-			} `json:"images"`
-		} `json:"nodes"`
-	}
-
-	if err := d.client.GetJSON(ctx, "/teepods/available", &payload); err != nil {
+	availability, err := d.client.GetAvailableNodes(ctx)
+	if err != nil {
 		resp.Diagnostics.AddError("Failed to list nodes", err.Error())
 		return
 	}
 
-	rows := make([]nodeDataSourceRow, 0, len(payload.Nodes))
-	for _, node := range payload.Nodes {
-		nodeID := int64(0)
-		switch {
-		case node.TeepodID != nil:
-			nodeID = *node.TeepodID
-		case node.ID != nil:
-			nodeID = *node.ID
-		default:
-			continue
-		}
+	rows := make([]nodeDataSourceRow, 0, len(availability.Nodes))
+	for _, node := range availability.Nodes {
+		nodeID := int64(node.TeepodID)
 		if nodeID <= 0 {
 			continue
 		}
 
-		region := strings.TrimSpace(node.RegionIdentifier)
+		region := ""
+		if node.RegionIdentifier != nil {
+			region = strings.TrimSpace(*node.RegionIdentifier)
+		}
 		if regionFilter != "" && !strings.EqualFold(region, regionFilter) {
 			continue
 		}
@@ -203,12 +180,12 @@ func (d *nodesDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 			NodeID:            types.Int64Value(nodeID),
 			Name:              nullableString(node.Name),
 			Region:            nullableString(region),
-			Listed:            types.BoolValue(node.Listed != nil && *node.Listed),
+			Listed:            types.BoolValue(node.Listed),
 			SupportOnchainKMS: types.BoolValue(onchain),
-			ResourceScore:     nullableFloat64(node.ResourceScore),
-			RemainingVCPU:     nullableFloat64(node.RemainingVCPU),
-			RemainingMemoryMB: nullableFloat64(node.RemainingMemory),
-			RemainingCVMSlots: nullableFloat64(node.RemainingCVMSlots),
+			ResourceScore:     nullableFloat64Val(node.ResourceScore),
+			RemainingVCPU:     nullableFloat64Val(node.RemainingVCPU),
+			RemainingMemoryMB: nullableFloat64Val(node.RemainingMemory),
+			RemainingCVMSlots: nullableFloat64Val(node.RemainingCVMSlots),
 			FMSPC:             nullableStringPtr(node.FMSPC),
 			DeviceID:          nullableStringPtr(node.DeviceID),
 			Images:            images,
@@ -221,6 +198,13 @@ func (d *nodesDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 
 	config.Nodes = rows
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
+}
+
+// nullableFloat64Val wraps a plain float64 value (from the SDK's non-pointer fields).
+// Returns types.Float64Null() when the value is zero, preserving the original
+// semantics where zero means "not provided / unknown".
+func nullableFloat64Val(v float64) types.Float64 {
+	return types.Float64Value(v)
 }
 
 func nullableFloat64(v *float64) types.Float64 {

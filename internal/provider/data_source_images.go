@@ -2,10 +2,11 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -15,7 +16,7 @@ import (
 var _ datasource.DataSource = &imagesDataSource{}
 
 type imagesDataSource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type imagesDataSourceModel struct {
@@ -82,11 +83,11 @@ func (d *imagesDataSource) Configure(_ context.Context, req datasource.Configure
 		return
 	}
 
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring images data source.",
+			"Expected *phala.Client while configuring images data source.",
 		)
 		return
 	}
@@ -111,26 +112,18 @@ func (d *imagesDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 	}
 	regionFilter := strings.TrimSpace(stringFromTF(config.Region))
 
-	var payload struct {
-		Nodes []struct {
-			RegionIdentifier string `json:"region_identifier"`
-			Images           []struct {
-				Name        string  `json:"name"`
-				IsDev       bool    `json:"is_dev"`
-				Version     []int64 `json:"version"`
-				OSImageHash *string `json:"os_image_hash"`
-			} `json:"images"`
-		} `json:"nodes"`
-	}
-
-	if err := d.client.GetJSON(ctx, "/teepods/available", &payload); err != nil {
+	availability, err := d.client.GetAvailableNodes(ctx)
+	if err != nil {
 		resp.Diagnostics.AddError("Failed to list images", err.Error())
 		return
 	}
 
 	aggregates := map[string]*imageAggregate{}
-	for _, node := range payload.Nodes {
-		region := strings.TrimSpace(node.RegionIdentifier)
+	for _, node := range availability.Nodes {
+		region := ""
+		if node.RegionIdentifier != nil {
+			region = strings.TrimSpace(*node.RegionIdentifier)
+		}
 		if regionFilter != "" && !strings.EqualFold(region, regionFilter) {
 			continue
 		}
@@ -145,7 +138,7 @@ func (d *imagesDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 			if !exists {
 				agg = &imageAggregate{
 					Name:        slug,
-					Version:     formatVersionTuple(image.Version),
+					Version:     formatVersionFromAny(image.Version),
 					IsDev:       image.IsDev,
 					OSImageHash: stringValueOrEmpty(image.OSImageHash),
 					Regions:     map[string]struct{}{},
@@ -154,7 +147,7 @@ func (d *imagesDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 			}
 
 			if agg.Version == "" {
-				agg.Version = formatVersionTuple(image.Version)
+				agg.Version = formatVersionFromAny(image.Version)
 			}
 			if agg.OSImageHash == "" {
 				agg.OSImageHash = stringValueOrEmpty(image.OSImageHash)
@@ -201,16 +194,28 @@ func (d *imagesDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
 
-func formatVersionTuple(version []int64) string {
-	if len(version) == 0 {
+// formatVersionFromAny formats the version field from an AvailableImage.
+// The SDK uses `any` for this field — it may be a []any of numbers or a string.
+func formatVersionFromAny(version any) string {
+	if version == nil {
 		return ""
 	}
-
-	parts := make([]string, 0, len(version))
-	for _, v := range version {
-		parts = append(parts, strconv.FormatInt(v, 10))
+	switch v := version.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, elem := range v {
+			parts = append(parts, fmt.Sprintf("%v", elem))
+		}
+		return strings.Join(parts, ".")
+	default:
+		s := strings.TrimSpace(fmt.Sprintf("%v", v))
+		if s == "<nil>" || s == "[]" {
+			return ""
+		}
+		return s
 	}
-	return strings.Join(parts, ".")
 }
 
 func stringValueOrEmpty(v *string) string {

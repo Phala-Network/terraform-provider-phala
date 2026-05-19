@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -25,7 +26,7 @@ var _ resource.ResourceWithValidateConfig = &appResource{}
 var _ resource.ResourceWithModifyPlan = &appResource{}
 
 type appResource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type appResourceModel struct {
@@ -103,18 +104,9 @@ func appInstanceObjectType() types.ObjectType {
 	return types.ObjectType{AttrTypes: appInstanceAttrTypes()}
 }
 
-type appAPIResponse struct {
-	ID         json.RawMessage  `json:"id"`
-	Name       string           `json:"name"`
-	AppID      string           `json:"app_id"`
-	CurrentCVM *cvmAPIResponse  `json:"current_cvm"`
-	CVMs       []cvmAPIResponse `json:"cvms"`
-	CVMCount   *int64           `json:"cvm_count"`
-}
-
 type appFetchResult struct {
-	App                *appAPIResponse
-	CVMs               []cvmAPIResponse
+	App                *phala.AppInfo
+	CVMs               []phala.CVMInfo
 	ReplicaListWarning error
 }
 
@@ -213,7 +205,7 @@ func (r *appResource) Configure(_ context.Context, req resource.ConfigureRequest
 	if req.ProviderData == nil {
 		return
 	}
-	if client, ok := req.ProviderData.(*APIClient); ok {
+	if client, ok := req.ProviderData.(*phala.Client); ok {
 		r.client = client
 	}
 }
@@ -231,11 +223,10 @@ func (r *appResource) ValidateConfig(ctx context.Context, req resource.ValidateC
 
 // ModifyPlan blocks mutable cloud-side updates to phala_app in members
 // (MIG) mode. The provider's existing app-update path mutates one CVM at
-// a time, and the legacy fan-out / scale-down logic is intentionally
-// disabled in members mode (it would silently delete a named slot). So
-// until the cloud exposes an app-revision-aware update endpoint that
-// preserves named slot identity, the safe answer is: refuse the plan
-// rather than apply it half-way.
+// a time (the bootstrap), so we cannot safely propagate mutations across
+// named slots. Until the cloud exposes an app-revision-aware update
+// endpoint that preserves named slot identity, the safe answer is: refuse
+// the plan rather than apply it half-way.
 //
 // We read individual attributes (not the whole struct) so this works on
 // fresh-Create plans too, where Computed nested fields are still Unknown
@@ -348,9 +339,10 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
-	var provResp provisionResponse
-	if err := r.client.PostJSON(ctx, "/cvms/provision", provReq, &provResp); err != nil {
-		resp.Diagnostics.AddError("Failed to provision app", err.Error())
+	provResp, err := r.client.ProvisionCVM(ctx, provReq)
+	if err != nil {
+		summary, detail := diagnosticFromAPIError("Failed to provision app", err)
+		resp.Diagnostics.AddError(summary, detail)
 		return
 	}
 	if provResp.ComposeHash == "" {
@@ -380,7 +372,8 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 
 	createResp, err := commitAndCreate(ctx, r.client, provResp, envCfg.EffectiveEncrypted, envCfg.HasEffectiveEncrypted, envCfg.EffectiveEnvKeys)
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to create initial app CVM", err.Error())
+		summary, detail := diagnosticFromAPIError("Failed to create initial app CVM", err)
+		resp.Diagnostics.AddError(summary, detail)
 		return
 	}
 
@@ -533,7 +526,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 			resp.Diagnostics.AddError("Failed to load app encryption key", err.Error())
 			return
 		}
-		pubkey := current.envEncryptionPubkey()
+		pubkey := cvmInfoEnvEncryptionPubkey(current)
 		if pubkey == "" {
 			resp.Diagnostics.AddError(
 				"Missing encryption public key",
@@ -647,7 +640,7 @@ func (r *appResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 		if identifier == "" {
 			continue
 		}
-		if err := r.client.Delete(ctx, cvmPath(identifier)); err != nil && !isNotFound(err) {
+		if err := r.client.DeleteCVM(ctx, identifier); err != nil && !isNotFound(err) {
 			resp.Diagnostics.AddError("Failed to delete app replica", err.Error())
 			return
 		}
@@ -682,8 +675,8 @@ func (r *appResource) ImportState(
 }
 
 func (r *appResource) fetchAppAndCVMs(ctx context.Context, appID string) (*appFetchResult, error) {
-	app := &appAPIResponse{}
-	if err := r.client.GetJSON(ctx, appPath(appID), app); err != nil {
+	app, err := r.client.GetAppInfo(ctx, appIDWithoutPrefix(appID))
+	if err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(app.AppID) == "" {
@@ -710,24 +703,20 @@ func (r *appResource) fetchAppAndCVMs(ctx context.Context, appID string) (*appFe
 	}, nil
 }
 
-func (r *appResource) fetchAppCVMs(ctx context.Context, appID string) ([]cvmAPIResponse, error) {
-	var rawItems []map[string]any
-	if err := r.client.GetJSON(ctx, appPath(appID)+"/cvms", &rawItems); err != nil {
+func (r *appResource) fetchAppCVMs(ctx context.Context, appID string) ([]phala.CVMInfo, error) {
+	rawItems, err := r.client.GetAppCVMs(ctx, appIDWithoutPrefix(appID))
+	if err != nil {
 		return nil, err
 	}
-	items := make([]cvmAPIResponse, 0, len(rawItems))
+	items := make([]phala.CVMInfo, 0, len(rawItems))
 	for _, raw := range rawItems {
 		items = append(items, normalizeCVMFromAny(raw))
 	}
 	return normalizeCVMInfos(items), nil
 }
 
-func (r *appResource) fetchCVM(ctx context.Context, id string) (*cvmAPIResponse, error) {
-	var out cvmAPIResponse
-	if err := r.client.GetJSON(ctx, cvmPath(id), &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
+func (r *appResource) fetchCVM(ctx context.Context, id string) (*phala.CVMInfo, error) {
+	return r.client.GetCVMInfo(ctx, id)
 }
 
 func (r *appResource) waitForAppDeletion(ctx context.Context, appID string, deadline time.Time, pollBase time.Duration) (bool, error) {
@@ -789,8 +778,9 @@ func (r *appResource) waitForAppReady(ctx context.Context, appID string, replica
 		}
 
 		allRunning := true
-		for _, cvm := range cvms {
-			if !strings.EqualFold(strings.TrimSpace(cvm.Status), "running") || cvm.inProgress() {
+		for i := range cvms {
+			cvm := &cvms[i]
+			if !strings.EqualFold(strings.TrimSpace(cvm.Status), "running") || cvmInfoInProgress(cvm) {
 				allRunning = false
 				break
 			}
@@ -808,10 +798,11 @@ func (r *appResource) waitForAppReady(ctx context.Context, appID string, replica
 	return fmt.Errorf("timeout after %s waiting for app %q replicas to become running", timeout, appID)
 }
 
-func stoppedReplicaFailure(cvms []cvmAPIResponse) (bool, string) {
+func stoppedReplicaFailure(cvms []phala.CVMInfo) (bool, string) {
 	failures := make([]string, 0, len(cvms))
-	for _, cvm := range cvms {
-		if stablePowerState(cvm.Status) != "stopped" || cvm.inProgress() {
+	for i := range cvms {
+		cvm := &cvms[i]
+		if stablePowerState(cvm.Status) != "stopped" || cvmInfoInProgress(cvm) {
 			continue
 		}
 		failures = append(failures, describeReplicaState(cvm))
@@ -823,13 +814,13 @@ func stoppedReplicaFailure(cvms []cvmAPIResponse) (bool, string) {
 	return true, "replica entered terminal stopped state: " + strings.Join(failures, ", ")
 }
 
-func describeReplicaState(cvm cvmAPIResponse) string {
-	id := strings.TrimSpace(cvm.VMUUID)
+func describeReplicaState(cvm *phala.CVMInfo) string {
+	id := cvmInfoVMUUID(cvm)
 	if id == "" {
-		id = strings.TrimSpace(cvm.InstanceID)
+		id = cvmInfoInstanceID(cvm)
 	}
 	if id == "" {
-		id = cvm.idString()
+		id = cvmInfoIDString(cvm)
 	}
 	if id == "" {
 		id = "<unknown>"
@@ -840,8 +831,8 @@ func describeReplicaState(cvm cvmAPIResponse) string {
 		status = "unknown"
 	}
 
-	if cvm.Progress != nil && strings.TrimSpace(cvm.Progress.Target) != "" {
-		return fmt.Sprintf("%s(status=%s,target=%s)", id, status, strings.TrimSpace(cvm.Progress.Target))
+	if cvm.Progress != nil && cvm.Progress.Target != nil && strings.TrimSpace(*cvm.Progress.Target) != "" {
+		return fmt.Sprintf("%s(status=%s,target=%s)", id, status, strings.TrimSpace(*cvm.Progress.Target))
 	}
 	return fmt.Sprintf("%s(status=%s)", id, status)
 }
@@ -849,8 +840,8 @@ func describeReplicaState(cvm cvmAPIResponse) string {
 func (r *appResource) populateState(
 	ctx context.Context,
 	state *appResourceModel,
-	app *appAPIResponse,
-	cvms []cvmAPIResponse,
+	app *phala.AppInfo,
+	cvms []phala.CVMInfo,
 ) diag.Diagnostics {
 	var diags diag.Diagnostics
 
@@ -870,7 +861,7 @@ func (r *appResource) populateState(
 		}
 	}
 
-	appID := ensureAppPrefix(nonEmpty(app.AppID, stringFromRawJSON(app.ID), state.ID.ValueString()))
+	appID := ensureAppPrefix(nonEmpty(app.AppID, app.ID, state.ID.ValueString()))
 	if appID != "" {
 		state.ID = types.StringValue(appID)
 		state.AppID = types.StringValue(appID)
@@ -897,19 +888,19 @@ func (r *appResource) populateState(
 			}
 		}
 
-		if v := primary.instanceType(); v != "" {
+		if v := cvmInfoInstanceType(primary); v != "" {
 			state.Size = types.StringValue(v)
 		}
 		if primary.DiskSize != nil {
 			state.DiskSize = types.Int64Value(*primary.DiskSize)
 		}
-		if primary.Resource != nil && primary.Resource.DiskInGB != nil {
-			state.DiskSize = types.Int64Value(*primary.Resource.DiskInGB)
+		if primary.Resource.DiskInGB != nil {
+			state.DiskSize = types.Int64Value(int64(*primary.Resource.DiskInGB))
 		}
-		if region := primary.region(); region != "" && !state.Region.IsNull() && !state.Region.IsUnknown() {
+		if region := cvmInfoRegion(primary); region != "" && !state.Region.IsNull() && !state.Region.IsUnknown() {
 			state.Region = types.StringValue(region)
 		}
-		if image := primary.osImageName(); image != "" {
+		if image := cvmInfoOSImageName(primary); image != "" {
 			// The cloud splits the OS image into two response fields
 			// (`os.name` + `os.os_image_hash`), but users frequently set
 			// `image` to the combined `<name>-<short-hash>` form printed by
@@ -919,27 +910,30 @@ func (r *appResource) populateState(
 			// form whenever it still refers to the same image; only fall
 			// back to the bare name when we can't prove a match.
 			prior := state.Image.ValueString()
-			if !primary.imageMatchesUserForm(prior) {
+			if !cvmInfoImageMatchesUserForm(primary, prior) {
 				state.Image = types.StringValue(image)
 			}
 		}
-		state.PublicLogs = nullableBool(primary.publicLogsValue())
-		state.PublicSysinfo = nullableBool(primary.publicSysinfoValue())
-		state.PublicTCBInfo = nullableBool(primary.publicTCBInfoValue())
-		state.GatewayEnabled = nullableBool(primary.gatewayEnabledValue())
-		state.SecureTime = nullableBool(primary.secureTimeValue())
-		state.StorageFS = nullableString(primary.storageFSValue())
+		state.PublicLogs = nullableBool(cvmInfoPublicLogsValue(primary))
+		state.PublicSysinfo = nullableBool(cvmInfoPublicSysinfoValue(primary))
+		state.PublicTCBInfo = nullableBool(cvmInfoPublicTCBInfoValue(primary))
+		state.GatewayEnabled = nullableBool(cvmInfoGatewayEnabledValue(primary))
+		state.SecureTime = nullableBool(cvmInfoSecureTimeValue(primary))
+		state.StorageFS = nullableString(cvmInfoStorageFSValue(primary))
 		state.Status = nullableString(primary.Status)
-		state.Endpoint = nullableString(primary.endpoint())
-		state.GatewayBaseDomain = nullableString(primary.gatewayBaseDomain())
-		state.GatewayCname = nullableString(primary.gatewayCname())
-		if primary.Listed != nil {
-			state.Listed = types.BoolValue(*primary.Listed)
+		state.Endpoint = nullableString(cvmInfoEndpoint(primary))
+		state.GatewayBaseDomain = nullableString(cvmInfoGatewayBaseDomain(primary))
+		state.GatewayCname = nullableString(cvmInfoGatewayCname(primary))
+		// Listed is a bool (not pointer) in the SDK. Only overwrite state when
+		// the API explicitly says true; otherwise keep existing state to avoid
+		// spurious RequiresReplace drift.
+		if primary.Listed {
+			state.Listed = types.BoolValue(true)
 		}
 		if primaryID != "" {
 			state.PrimaryCVMID = types.StringValue(primaryID)
 			if state.DockerCompose.IsNull() || state.DockerCompose.IsUnknown() {
-				compose, err := r.client.GetText(ctx, cvmPath(primaryID)+"/docker-compose.yml")
+				compose, err := r.client.GetCVMDockerCompose(ctx, primaryID)
 				if err == nil {
 					state.DockerCompose = types.StringValue(normalizeTextBody(compose))
 				}
@@ -948,7 +942,7 @@ func (r *appResource) populateState(
 			// did not set pre_launch_script. Keep null/unknown state null so an
 			// optional unmanaged field does not become provider-managed drift.
 			if !state.PreLaunchScript.IsNull() && !state.PreLaunchScript.IsUnknown() {
-				preLaunchScript, err := r.client.GetText(ctx, cvmPath(primaryID)+"/pre-launch-script")
+				preLaunchScript, err := r.client.GetCVMPreLaunchScript(ctx, primaryID)
 				if err == nil {
 					state.PreLaunchScript = nullableString(normalizeTextBody(preLaunchScript))
 				}
@@ -1002,43 +996,6 @@ func appendReplicaListWarning(diags *diag.Diagnostics, err error) {
 		"App replica details temporarily unavailable",
 		fmt.Sprintf("Using existing replica-derived state because listing app replicas failed: %v", err),
 	)
-}
-
-func composeEnvKeysFromAttrs(ctx context.Context, env types.Map, envKeys types.List) ([]string, bool, diag.Diagnostics) {
-	var diags diag.Diagnostics
-
-	if !env.IsNull() && !env.IsUnknown() {
-		envMap, mapDiags := mapValueAsStrings(ctx, env, "env")
-		diags.Append(mapDiags...)
-		if diags.HasError() {
-			return nil, false, diags
-		}
-		return sortedEnvKeys(envMap), true, diags
-	}
-
-	if !envKeys.IsNull() && !envKeys.IsUnknown() {
-		keys, listDiags := listValueAsStrings(ctx, envKeys, "env_keys")
-		diags.Append(listDiags...)
-		if diags.HasError() {
-			return nil, false, diags
-		}
-		sort.Strings(keys)
-		return keys, true, diags
-	}
-
-	return nil, false, diags
-}
-
-func equalStringSlices(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // validateMembersAndName enforces the MIG-mode invariant for phala_app:
@@ -1146,7 +1103,7 @@ func appIDFromState(state appResourceModel) string {
 	return ""
 }
 
-func selectPrimaryIdentifier(planPrimary, statePrimary types.String, cvms []cvmAPIResponse, preferredName string) string {
+func selectPrimaryIdentifier(planPrimary, statePrimary types.String, cvms []phala.CVMInfo, preferredName string) string {
 	if !planPrimary.IsNull() && !planPrimary.IsUnknown() && strings.TrimSpace(planPrimary.ValueString()) != "" {
 		return planPrimary.ValueString()
 	}
@@ -1160,10 +1117,10 @@ func selectPrimaryIdentifier(planPrimary, statePrimary types.String, cvms []cvmA
 	return selectReplicaIdentifier(*primary)
 }
 
-func selectPrimaryCVM(cvms []cvmAPIResponse, preferredSourceVMUUID string, preferredName string) *cvmAPIResponse {
+func selectPrimaryCVM(cvms []phala.CVMInfo, preferredSourceVMUUID string, preferredName string) *phala.CVMInfo {
 	if preferredSourceVMUUID != "" {
 		for i := range cvms {
-			if strings.EqualFold(strings.TrimSpace(cvms[i].VMUUID), strings.TrimSpace(preferredSourceVMUUID)) {
+			if strings.EqualFold(cvmInfoVMUUID(&cvms[i]), strings.TrimSpace(preferredSourceVMUUID)) {
 				return &cvms[i]
 			}
 		}
@@ -1186,25 +1143,31 @@ func selectPrimaryCVM(cvms []cvmAPIResponse, preferredSourceVMUUID string, prefe
 	return &cvms[0]
 }
 
-func selectReplicaIdentifier(cvm cvmAPIResponse) string {
-	if strings.TrimSpace(cvm.VMUUID) != "" {
-		return strings.TrimSpace(cvm.VMUUID)
+func selectReplicaIdentifier(cvm phala.CVMInfo) string {
+	if v := cvmInfoVMUUID(&cvm); v != "" {
+		return v
 	}
-	if id := cvm.idString(); strings.TrimSpace(id) != "" {
-		return strings.TrimSpace(id)
+	if v := cvmInfoIDString(&cvm); v != "" {
+		return v
 	}
-	if strings.TrimSpace(cvm.InstanceID) != "" {
-		return strings.TrimSpace(cvm.InstanceID)
+	if v := cvmInfoInstanceID(&cvm); v != "" {
+		return v
 	}
 	return ""
 }
 
-func buildAppInstances(ctx context.Context, cvms []cvmAPIResponse) (types.List, diag.Diagnostics) {
+func buildAppInstances(ctx context.Context, cvms []phala.CVMInfo) (types.List, diag.Diagnostics) {
 	var diags diag.Diagnostics
-	ordered := append([]cvmAPIResponse(nil), cvms...)
+	ordered := append([]phala.CVMInfo(nil), cvms...)
 	sort.SliceStable(ordered, func(i, j int) bool {
-		leftCreated := strings.TrimSpace(ordered[i].CreatedAt)
-		rightCreated := strings.TrimSpace(ordered[j].CreatedAt)
+		leftCreated := ""
+		if ordered[i].CreatedAt != nil {
+			leftCreated = strings.TrimSpace(*ordered[i].CreatedAt)
+		}
+		rightCreated := ""
+		if ordered[j].CreatedAt != nil {
+			rightCreated = strings.TrimSpace(*ordered[j].CreatedAt)
+		}
 		if leftCreated != rightCreated {
 			if leftCreated == "" {
 				return false
@@ -1220,24 +1183,29 @@ func buildAppInstances(ctx context.Context, cvms []cvmAPIResponse) (types.List, 
 		if leftID != rightID {
 			return leftID < rightID
 		}
-		return ordered[i].InstanceID < ordered[j].InstanceID
+		return cvmInfoInstanceID(&ordered[i]) < cvmInfoInstanceID(&ordered[j])
 	})
 
 	out := make([]appInstanceModel, 0, len(ordered))
-	for _, cvm := range ordered {
+	for i := range ordered {
+		cvm := &ordered[i]
+		createdAt := ""
+		if cvm.CreatedAt != nil {
+			createdAt = *cvm.CreatedAt
+		}
 		out = append(out, appInstanceModel{
-			ID:                nullableString(selectReplicaIdentifier(cvm)),
-			AppID:             nullableString(cvm.AppID),
+			ID:                nullableString(selectReplicaIdentifier(*cvm)),
+			AppID:             nullableString(cvmInfoAppID(cvm)),
 			Name:              nullableString(cvm.Name),
-			VMUUID:            nullableString(cvm.VMUUID),
-			InstanceID:        nullableString(cvm.InstanceID),
+			VMUUID:            nullableString(cvmInfoVMUUID(cvm)),
+			InstanceID:        nullableString(cvmInfoInstanceID(cvm)),
 			Status:            nullableString(cvm.Status),
-			Region:            nullableString(cvm.region()),
-			InstanceType:      nullableString(cvm.instanceType()),
-			Endpoint:          nullableString(cvm.endpoint()),
-			GatewayBaseDomain: nullableString(cvm.gatewayBaseDomain()),
-			GatewayCname:      nullableString(cvm.gatewayCname()),
-			CreatedAt:         nullableString(cvm.CreatedAt),
+			Region:            nullableString(cvmInfoRegion(cvm)),
+			InstanceType:      nullableString(cvmInfoInstanceType(cvm)),
+			Endpoint:          nullableString(cvmInfoEndpoint(cvm)),
+			GatewayBaseDomain: nullableString(cvmInfoGatewayBaseDomain(cvm)),
+			GatewayCname:      nullableString(cvmInfoGatewayCname(cvm)),
+			CreatedAt:         nullableString(createdAt),
 		})
 	}
 	value, valueDiags := types.ListValueFrom(ctx, appInstanceObjectType(), out)
@@ -1248,14 +1216,16 @@ func buildAppInstances(ctx context.Context, cvms []cvmAPIResponse) (types.List, 
 	return value, diags
 }
 
-func normalizeCVMInfos(cvms []cvmAPIResponse) []cvmAPIResponse {
-	out := make([]cvmAPIResponse, 0, len(cvms))
+func normalizeCVMInfos(cvms []phala.CVMInfo) []phala.CVMInfo {
+	out := make([]phala.CVMInfo, 0, len(cvms))
 	for _, cvm := range cvms {
-		if strings.TrimSpace(cvm.AppID) == "" &&
-			strings.TrimSpace(cvm.VMUUID) == "" &&
+		appID := cvmInfoAppID(&cvm)
+		vmUUID := cvmInfoVMUUID(&cvm)
+		if appID == "" &&
+			vmUUID == "" &&
 			strings.TrimSpace(cvm.Name) == "" &&
 			strings.TrimSpace(cvm.Status) == "" &&
-			len(cvm.ID) == 0 {
+			strings.TrimSpace(cvm.ID) == "" {
 			continue
 		}
 		out = append(out, cvm)
@@ -1263,16 +1233,19 @@ func normalizeCVMInfos(cvms []cvmAPIResponse) []cvmAPIResponse {
 	return out
 }
 
-func normalizeCVMFromAny(raw map[string]any) cvmAPIResponse {
+func normalizeCVMFromAny(raw map[string]any) phala.CVMInfo {
 	b, err := json.Marshal(raw)
 	if err != nil {
-		return cvmAPIResponse{}
+		return phala.CVMInfo{}
 	}
-	var out cvmAPIResponse
+	var out phala.CVMInfo
 	if err := json.Unmarshal(b, &out); err != nil {
-		return cvmAPIResponse{}
+		return phala.CVMInfo{}
 	}
-	out.AppID = ensureAppPrefix(out.AppID)
+	if appID := cvmInfoAppID(&out); appID != "" {
+		normalized := ensureAppPrefix(appID)
+		out.AppID = &normalized
+	}
 
 	// The API sometimes nests CVM fields inside a "hosted" sub-object.
 	// Unmarshal it separately and use as fallback for any empty top-level fields.
@@ -1284,7 +1257,7 @@ func normalizeCVMFromAny(raw map[string]any) cvmAPIResponse {
 	if err != nil {
 		return out
 	}
-	var hosted cvmAPIResponse
+	var hosted phala.CVMInfo
 	if err := json.Unmarshal(hb, &hosted); err != nil {
 		return out
 	}
@@ -1295,20 +1268,28 @@ func normalizeCVMFromAny(raw map[string]any) cvmAPIResponse {
 	if out.Status == "" {
 		out.Status = hosted.Status
 	}
-	if out.AppID == "" {
-		out.AppID = ensureAppPrefix(hosted.AppID)
+	if cvmInfoAppID(&out) == "" && cvmInfoAppID(&hosted) != "" {
+		normalized := ensureAppPrefix(cvmInfoAppID(&hosted))
+		out.AppID = &normalized
 	}
-	if out.InstanceID == "" {
-		out.InstanceID = hosted.InstanceID
+	if cvmInfoInstanceID(&out) == "" && cvmInfoInstanceID(&hosted) != "" {
+		v := cvmInfoInstanceID(&hosted)
+		out.InstanceID = &v
 	}
-	if out.VMUUID == "" {
-		out.VMUUID = hosted.idString()
+	if cvmInfoVMUUID(&out) == "" {
+		if id := cvmInfoIDString(&hosted); id != "" {
+			out.VMUUID = &id
+		}
 	}
-	if out.BaseImage == "" {
-		out.BaseImage = hosted.BaseImage
+	if cvmInfoOSImageName(&out) == "" {
+		if img := cvmInfoOSImageName(&hosted); img != "" {
+			out.BaseImage = &img
+		}
 	}
-	if out.StorageFS == "" {
-		out.StorageFS = hosted.StorageFS
+	if cvmInfoStorageFSValue(&out) == "" {
+		if sf := cvmInfoStorageFSValue(&hosted); sf != "" {
+			out.StorageFS = &sf
+		}
 	}
 	if out.PublicLogs == nil {
 		out.PublicLogs = hosted.PublicLogs
@@ -1316,8 +1297,8 @@ func normalizeCVMFromAny(raw map[string]any) cvmAPIResponse {
 	if out.PublicSysinfo == nil {
 		out.PublicSysinfo = hosted.PublicSysinfo
 	}
-	if out.PublicTCBInfo == nil {
-		out.PublicTCBInfo = hosted.PublicTCBInfo
+	if out.PublicTcbinfo == nil {
+		out.PublicTcbinfo = hosted.PublicTcbinfo
 	}
 	if out.GatewayEnabled == nil {
 		out.GatewayEnabled = hosted.GatewayEnabled
@@ -1325,13 +1306,11 @@ func normalizeCVMFromAny(raw map[string]any) cvmAPIResponse {
 	if out.SecureTime == nil {
 		out.SecureTime = hosted.SecureTime
 	}
-	if len(out.ID) == 0 {
+	if strings.TrimSpace(out.ID) == "" {
 		out.ID = hosted.ID
 	}
 	if appURL := stringFromAny(hostedRaw["app_url"]); appURL != "" && len(out.Endpoints) == 0 {
-		out.Endpoints = append(out.Endpoints, struct {
-			App string `json:"app"`
-		}{App: appURL})
+		out.Endpoints = append(out.Endpoints, phala.CVMEndpoint{App: appURL})
 	}
 
 	return out
@@ -1339,21 +1318,13 @@ func normalizeCVMFromAny(raw map[string]any) cvmAPIResponse {
 
 func appPath(id string) string {
 	trimmed := strings.TrimSpace(id)
-	if strings.HasPrefix(trimmed, "app_") {
-		trimmed = strings.TrimPrefix(trimmed, "app_")
-	}
-	return "/apps/" + url.PathEscape(trimmed)
+	return "/apps/" + url.PathEscape(appIDWithoutPrefix(trimmed))
 }
 
-func stringFromRawJSON(v json.RawMessage) string {
-	if len(v) == 0 {
-		return ""
-	}
-	var s string
-	if err := json.Unmarshal(v, &s); err == nil {
-		return strings.TrimSpace(s)
-	}
-	return ""
+// appIDWithoutPrefix removes the "app_" prefix from an app ID.
+func appIDWithoutPrefix(id string) string {
+	trimmed := strings.TrimSpace(id)
+	return strings.TrimPrefix(trimmed, "app_")
 }
 
 func stringFromAny(v any) string {
@@ -1365,4 +1336,32 @@ func stringFromAny(v any) string {
 	default:
 		return ""
 	}
+}
+
+// buildUpdateEnvsRequest converts a generic env update map to the SDK type.
+func buildUpdateEnvsRequest(payload map[string]any) *phala.UpdateEnvsRequest {
+	req := &phala.UpdateEnvsRequest{}
+	if v, ok := payload["encrypted_env"].(string); ok {
+		req.EncryptedEnv = v
+	}
+	if v, ok := payload["env_keys"]; ok {
+		switch keys := v.(type) {
+		case []string:
+			req.EnvKeys = keys
+		case string:
+			req.EnvKeys = []string{keys}
+		}
+	}
+	if v, ok := payload["compose_hash"].(string); ok && v != "" {
+		req.ComposeHash = &v
+	}
+	if v, ok := payload["transaction_hash"].(string); ok && v != "" {
+		req.TransactionHash = &v
+	}
+	return req
+}
+
+// boolPtr returns a pointer to the given bool value.
+func boolPtr(v bool) *bool {
+	return &v
 }

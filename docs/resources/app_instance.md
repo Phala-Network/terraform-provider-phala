@@ -197,5 +197,3 @@ The gateway suffix is shared across every slot in an app, so reading it from any
 - `region` (String) Region of the CVM currently occupying this slot.
 - `status` (String) Current CVM status.
 - `vm_uuid` (String) Current CVM UUID occupying this slot. Changes when the CVM is replaced.
-
-

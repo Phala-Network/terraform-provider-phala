@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -11,7 +12,7 @@ import (
 var _ datasource.DataSource = &accountDataSource{}
 
 type accountDataSource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type accountDataSourceModel struct {
@@ -115,11 +116,11 @@ func (d *accountDataSource) Configure(_ context.Context, req datasource.Configur
 		return
 	}
 
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring account data source.",
+			"Expected *phala.Client while configuring account data source.",
 		)
 		return
 	}
@@ -128,7 +129,7 @@ func (d *accountDataSource) Configure(_ context.Context, req datasource.Configur
 }
 
 func (d *accountDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
-	me, err := fetchAuthMe(ctx, d.client)
+	me, err := d.client.GetCurrentUser(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to read account info", err.Error())
 		return
@@ -145,18 +146,18 @@ func (d *accountDataSource) Read(ctx context.Context, _ datasource.ReadRequest, 
 		Avatar:   nullableStringPtr(me.User.Avatar),
 
 		EmailVerified:  nullableBool(me.User.EmailVerified),
-		TotpEnabled:    nullableBool(me.User.TotpEnabled),
+		TotpEnabled:    nullableBool(me.User.TOTPEnabled),
 		HasBackupCodes: nullableBool(me.User.HasBackupCodes),
 		HasPassword:    nullableBool(me.User.FlagHasPassword),
 
 		WorkspaceID:   nullableString(me.Workspace.ID),
 		WorkspaceName: nullableString(me.Workspace.Name),
-		WorkspaceSlug: nullableString(me.Workspace.Slug),
+		WorkspaceSlug: nullableStringPtr(me.Workspace.Slug),
 		WorkspaceTier: nullableString(me.Workspace.Tier),
 		WorkspaceRole: nullableString(me.Workspace.Role),
 
-		CreditBalance:           nullableString(me.Credits.Balance),
-		CreditGrantedBalance:    nullableString(me.Credits.GrantedBalance),
+		CreditBalance:           nullableStringPtr(me.Credits.Balance),
+		CreditGrantedBalance:    nullableStringPtr(me.Credits.GrantedBalance),
 		CreditIsPostPaid:        nullableBool(me.Credits.IsPostPaid),
 		CreditOutstandingAmount: nullableStringPtr(me.Credits.OutstandingAmount),
 	}

@@ -45,41 +45,61 @@ func TestBuildAppPreflightProvisionReq(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %v", reqDiags)
 	}
 
-	if req["name"] != "demo" || req["instance_type"] != "tdx.small" {
+	if req.Name != "demo" || req.InstanceType != "tdx.small" {
 		t.Fatalf("unexpected provision request: %#v", req)
 	}
-	if req["region"] != "US-WEST-1" || req["image"] != "dstack-dev-0.5.9" {
-		t.Fatalf("missing placement fields: %#v", req)
+	if req.Region == nil || *req.Region != "US-WEST-1" {
+		t.Fatalf("missing region: %#v", req.Region)
 	}
-	if req["teepod_id"] != int64(42) || req["disk_size"] != int64(20) {
-		t.Fatalf("missing numeric fields: %#v", req)
+	if req.Image == nil || *req.Image != "dstack-dev-0.5.9" {
+		t.Fatalf("missing image: %#v", req.Image)
 	}
-	if req["listed"] != false || req["kms"] != "PHALA" {
-		t.Fatalf("unexpected listed/kms: %#v", req)
+	if req.TeepodID == nil || *req.TeepodID != 42 {
+		t.Fatalf("missing teepod_id: %#v", req.TeepodID)
 	}
-	if req["user_config"] == nil {
-		t.Fatalf("expected user_config in request: %#v", req)
+	if req.DiskSize == nil || *req.DiskSize != 20 {
+		t.Fatalf("missing disk_size: %#v", req.DiskSize)
+	}
+	if req.Listed == nil || *req.Listed {
+		t.Fatalf("unexpected listed: %#v", req.Listed)
+	}
+	if req.KMSType == nil || *req.KMSType != "PHALA" {
+		t.Fatalf("unexpected kms_type: %#v", req.KMSType)
+	}
+	if len(req.SSHAuthorizedKeys) != 1 || req.SSHAuthorizedKeys[0] != "ssh-ed25519 AAAA..." {
+		t.Fatalf("missing ssh_authorized_keys: %#v", req.SSHAuthorizedKeys)
 	}
 
-	composeFile, ok := req["compose_file"].(map[string]any)
-	if !ok {
-		t.Fatalf("compose_file missing or wrong type: %#v", req["compose_file"])
+	if req.ComposeFile == nil {
+		t.Fatalf("compose_file missing")
 	}
-	if composeFile["name"] != "demo" || composeFile["docker_compose_file"] != "services:\n  app:\n" {
-		t.Fatalf("unexpected compose_file identity: %#v", composeFile)
+	cf := req.ComposeFile
+	if cf.Name != "demo" || cf.DockerComposeFile != "services:\n  app:\n" {
+		t.Fatalf("unexpected compose_file identity: %#v", cf)
 	}
-	if composeFile["pre_launch_script"] != "#!/bin/sh\necho ready\n" {
-		t.Fatalf("unexpected pre_launch_script: %#v", composeFile)
+	if cf.PreLaunchScript == nil || *cf.PreLaunchScript != "#!/bin/sh\necho ready\n" {
+		t.Fatalf("unexpected pre_launch_script: %#v", cf.PreLaunchScript)
 	}
-	if composeFile["public_logs"] != true || composeFile["public_sysinfo"] != false || composeFile["public_tcbinfo"] != true {
-		t.Fatalf("unexpected visibility flags: %#v", composeFile)
+	if cf.PublicLogs == nil || !*cf.PublicLogs {
+		t.Fatalf("unexpected public_logs: %#v", cf.PublicLogs)
 	}
-	if composeFile["gateway_enabled"] != true || composeFile["secure_time"] != false || composeFile["storage_fs"] != "zfs" {
-		t.Fatalf("unexpected compose settings: %#v", composeFile)
+	if cf.PublicSysinfo == nil || *cf.PublicSysinfo {
+		t.Fatalf("unexpected public_sysinfo: %#v", cf.PublicSysinfo)
 	}
-	keys, ok := composeFile["allowed_envs"].([]string)
-	if !ok || len(keys) != 2 || keys[0] != "API" || keys[1] != "ZED" {
-		t.Fatalf("unexpected allowed_envs: %#v", composeFile["allowed_envs"])
+	if cf.PublicTcbinfo == nil || !*cf.PublicTcbinfo {
+		t.Fatalf("unexpected public_tcbinfo: %#v", cf.PublicTcbinfo)
+	}
+	if cf.GatewayEnabled == nil || !*cf.GatewayEnabled {
+		t.Fatalf("unexpected gateway_enabled: %#v", cf.GatewayEnabled)
+	}
+	if cf.SecureTime == nil || *cf.SecureTime {
+		t.Fatalf("unexpected secure_time: %#v", cf.SecureTime)
+	}
+	if cf.StorageFS == nil || *cf.StorageFS != "zfs" {
+		t.Fatalf("unexpected storage_fs: %#v", cf.StorageFS)
+	}
+	if len(cf.AllowedEnvs) != 2 || cf.AllowedEnvs[0] != "API" || cf.AllowedEnvs[1] != "ZED" {
+		t.Fatalf("unexpected allowed_envs: %#v", cf.AllowedEnvs)
 	}
 }
 
@@ -92,10 +112,10 @@ func TestBuildAppPreflightProvisionReqDefaults(t *testing.T) {
 	if diags.HasError() {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
-	if req["kms"] != "PHALA" {
-		t.Fatalf("default kms = %v", req["kms"])
+	if req.KMSType == nil || *req.KMSType != "PHALA" {
+		t.Fatalf("default kms_type = %#v", req.KMSType)
 	}
-	if req["listed"] != false {
-		t.Fatalf("default listed = %v", req["listed"])
+	if req.Listed == nil || *req.Listed {
+		t.Fatalf("default listed = %#v", req.Listed)
 	}
 }

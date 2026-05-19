@@ -57,5 +57,3 @@ resource "phala_cvm_power" "web" {
 
 - `id` (String) Power state resource ID (same as cvm_id).
 - `status` (String) Current CVM status from API.
-
-
