@@ -45,9 +45,18 @@ signs:
       - "${artifact}"
 
 release:
-  # Mark `vX.Y.Z-<suffix>` (e.g. -beta.1, -rc.2) as a GitHub pre-release so it
-  # is not auto-promoted to "Latest." Stable `vX.Y.Z` tags publish normally.
-  prerelease: auto
+  # Do NOT set `prerelease: auto`. Empirically, the Terraform Registry
+  # refuses to index GitHub releases whose `prerelease` flag is true,
+  # even when the version itself carries a SemVer prerelease suffix
+  # (-beta.N, -rc.N). Terraform's constraint solver already treats
+  # such suffixes as opt-in only on the consumer side, so the GitHub
+  # flag is redundant guardrail. Leaving it `false` (goreleaser
+  # default) keeps Registry ingestion working; the 0.2.0-beta.* tags
+  # used this pattern.
+  #
+  # If we ever ship a final stable v1.0.0, the convention is the same:
+  # tags without a SemVer suffix become GitHub-Latest automatically,
+  # tags with a suffix do not.
   extra_files:
     - glob: "terraform-registry-manifest.json"
       name_template: "{{ .ProjectName }}_{{ .Version }}_manifest.json"
