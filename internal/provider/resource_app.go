@@ -232,9 +232,10 @@ func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 
 	// Block removing the members attribute via in-place update. The CVMs
 	// owned by phala_app_instance resources remain on the cloud, but
-	// phala_app would revert to anonymous-replicas semantics, and the next
-	// apply would try to scale the CVM count back to phala_app.replicas
-	// (deleting slots). Require destroy + recreate for this transition.
+	// phala_app would revert to the single-CVM update model, and the
+	// next apply would mutate only the bootstrap slot — leaving the
+	// orphaned phala_app_instance slots on the old revision. Require
+	// destroy + recreate for this transition.
 	if stateHasMembers && !planHasMembers {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("members"),
@@ -242,80 +243,9 @@ func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 			"This phala_app was previously declared with `members` (MIG mode). "+
 				"Removing the attribute in place is not supported because the cloud-side "+
 				"CVMs created via phala_app_instance would be orphaned and the next "+
-				"reconcile would delete named slots. Destroy and recreate the app instead.",
+				"update would only touch the bootstrap slot. Destroy and recreate the "+
+				"app instead.",
 		)
-		return
-	}
-
-	if !stateHasMembers && !planHasMembers {
-		// Pure legacy mode — nothing to guard.
-		return
-	}
-
-	// In members mode, block any change to the app-level mutable fields. We
-	// compare each field individually via attribute reads so we never need
-	// to deserialize the full model (which can fail when Computed fields
-	// are still Unknown at plan time). Crucially we compare Config (user
-	// HCL) against State, NOT Plan against State: Optional+Computed fields
-	// like image/size/disk_size/public_* show up as "changed" in the plan
-	// every time when the user didn't specify them, because the plan reverts
-	// to Unknown awaiting the next Read. Only block when the user explicitly
-	// wrote a different value in HCL.
-	var changed []path.Path
-	checkPaths := []path.Path{
-		path.Root("docker_compose"),
-		path.Root("pre_launch_script"),
-		path.Root("env"),
-		path.Root("encrypted_env"),
-		path.Root("env_keys"),
-		path.Root("env_compose_hash"),
-		path.Root("env_transaction_hash"),
-		path.Root("image"),
-		path.Root("size"),
-		path.Root("disk_size"),
-		path.Root("public_logs"),
-		path.Root("public_sysinfo"),
-		path.Root("public_tcbinfo"),
-		path.Root("gateway_enabled"),
-		path.Root("secure_time"),
-	}
-	for _, p := range checkPaths {
-		if configFieldMutated(ctx, req.Config, req.State, p, &resp.Diagnostics) {
-			changed = append(changed, p)
-		}
-	}
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	if len(changed) == 0 {
-		return
-	}
-
-	fields := make([]string, 0, len(changed))
-	for _, p := range changed {
-		fields = append(fields, p.String())
-	}
-	detail := fmt.Sprintf(
-		"phala_app is in members (MIG) mode but the plan changes app-level "+
-			"fields that the provider cannot safely propagate across named slots "+
-			"with the current cloud API surface: %s.\n\n"+
-			"The per-CVM PATCH endpoints (/cvms/{id}/docker-compose, /envs, "+
-			"/os-image, /resources, /compose_file/provision) target a single "+
-			"CVM. Applying them through phala_app would mutate only the "+
-			"bootstrap slot and leave every phala_app_instance slot on the "+
-			"old revision — divergent compose/env/image across the replica "+
-			"set. Until an app-revision-aware update endpoint preserves all "+
-			"named slots, this provider refuses such an update.\n\n"+
-			"Workarounds:\n"+
-			"  1. Destroy the phala_app and the matching phala_app_instance "+
-			"     resources, then recreate them with the new compose/env/image.\n"+
-			"  2. Keep these fields constant across the replica set, and use "+
-			"     phala_app_instance.env for per-slot overrides that are scoped "+
-			"     to that slot only.\n",
-		strings.Join(fields, ", "),
-	)
-	for _, p := range changed {
-		resp.Diagnostics.AddAttributeError(p, "Unsafe update in members mode", detail)
 	}
 }
 
@@ -548,123 +478,92 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		resp.Diagnostics.AddError("Failed to fetch current app CVMs", err.Error())
 		return
 	}
-	// All app-level mutations target the bootstrap CVM only. The bootstrap is
-	// the CVM whose name matches plan.Name (in members mode, that's
-	// phala_app.name's slot; in single-CVM mode it's the only CVM). The
-	// guardrail in ModifyPlan blocks any of these mutations in members mode
-	// because the cloud has no app-revision update endpoint that would
-	// propagate them across slots — so reaching this point implies a
-	// single-CVM app where touching the bootstrap is the whole app.
+	// In members mode the bootstrap is the slot whose name == phala_app.name;
+	// every other CVM is a phala_app_instance slot. In single-CVM mode the
+	// bootstrap is the only CVM. Either way it's the right target for the
+	// per-CVM provision call and for env-encryption pubkey lookup.
 	bootstrapID := selectPrimaryIdentifier(plan.PrimaryCVMID, state.PrimaryCVMID, cvms, plan.Name.ValueString())
 	if bootstrapID == "" {
 		resp.Diagnostics.AddError("No CVM found for app", "App has no CVMs available for update operations.")
 		return
 	}
 
-	if !plan.Size.Equal(state.Size) || diskSizeChanged {
-		resourceReq := map[string]any{"allow_restart": true}
-		if !plan.Size.Equal(state.Size) {
-			resourceReq["instance_type"] = plan.Size.ValueString()
-		}
-		if diskSizeChanged {
-			resourceReq["disk_size"] = plan.DiskSize.ValueInt64()
-		}
-		if err := r.client.PatchJSON(ctx, cvmPath(bootstrapID)+"/resources", resourceReq, nil); err != nil {
-			resp.Diagnostics.AddError("Failed to update app resources", err.Error())
-			return
-		}
-	}
-
-	if settingsChanged {
-		composeReq := buildComposeFileUpdateRequest(composeFileFields{
-			Name:            plan.Name.ValueString(),
-			DockerCompose:   plan.DockerCompose.ValueString(),
-			PreLaunchScript: plan.PreLaunchScript,
-			PublicLogs:      plan.PublicLogs,
-			PublicSysinfo:   plan.PublicSysinfo,
-			PublicTCBInfo:   plan.PublicTCBInfo,
-			GatewayEnabled:  plan.GatewayEnabled,
-			SecureTime:      plan.SecureTime,
-			StorageFS:       plan.StorageFS,
-			EnvKeys:         composeEnvKeys,
-			HasEnvKeys:      composeHasEnvKeys,
-		}, updateComposeEnvKeys)
-		if err := provisionAndApplyComposeFileUpdate(ctx, r.client, bootstrapID, composeReq); err != nil {
-			resp.Diagnostics.AddError("Failed to update app compose settings", err.Error())
-			return
-		}
-	}
-
-	if imageChanged {
-		if plan.Image.IsNull() || plan.Image.IsUnknown() || strings.TrimSpace(plan.Image.ValueString()) == "" {
-			resp.Diagnostics.AddError("Invalid image update", "image must be set to a target OS image name when updating.")
-			return
-		}
-		if err := r.client.PatchJSON(ctx, cvmPath(bootstrapID)+"/os-image", map[string]any{"os_image_name": plan.Image.ValueString()}, nil); err != nil {
-			resp.Diagnostics.AddError("Failed to update app OS image", err.Error())
-			return
-		}
-	}
-
-	if !plan.DockerCompose.Equal(state.DockerCompose) {
-		if err := r.client.PatchText(ctx, cvmPath(bootstrapID)+"/docker-compose", plan.DockerCompose.ValueString(), map[string]string{"Content-Type": "text/yaml"}, nil); err != nil {
-			resp.Diagnostics.AddError("Failed to update app docker compose", err.Error())
-			return
-		}
-	}
-
-	if !plan.PreLaunchScript.Equal(state.PreLaunchScript) {
-		script := ""
-		if !plan.PreLaunchScript.IsNull() && !plan.PreLaunchScript.IsUnknown() {
-			script = plan.PreLaunchScript.ValueString()
-		}
-		if err := r.client.PatchText(ctx, cvmPath(bootstrapID)+"/pre-launch-script", script, map[string]string{"Content-Type": "text/plain"}, nil); err != nil {
-			resp.Diagnostics.AddError("Failed to update app pre-launch script", err.Error())
-			return
-		}
-	}
-
-	if !plan.Env.Equal(state.Env) ||
+	membersMode := appHasMembers(plan) || appHasMembers(state)
+	envChanged := !plan.Env.Equal(state.Env) ||
 		!plan.EncryptedEnv.Equal(state.EncryptedEnv) ||
 		!plan.EnvKeys.Equal(state.EnvKeys) ||
 		!plan.EnvComposeHash.Equal(state.EnvComposeHash) ||
-		!plan.EnvTransactionHash.Equal(state.EnvTransactionHash) {
-		if envCfg.HasAutoEnv {
-			current, err := r.fetchCVM(ctx, bootstrapID)
-			if err != nil {
-				resp.Diagnostics.AddError("Failed to load app encryption key", err.Error())
-				return
-			}
-			pubkey := current.envEncryptionPubkey()
-			if pubkey == "" {
-				resp.Diagnostics.AddError("Missing encryption public key", "Bootstrap CVM response did not include encrypted_env_pubkey. Use manual encrypted_env/env_keys mode.")
-				return
-			}
-			if err := envCfg.encryptAutoEnv(pubkey); err != nil {
-				resp.Diagnostics.AddError("Failed to encrypt env", err.Error())
-				return
-			}
-		}
-		envReq, err := envCfg.buildEnvUpdateReq(plan.EnvKeys)
+		!plan.EnvTransactionHash.Equal(state.EnvTransactionHash)
+
+	// Encrypt auto-env up-front (once per Update). The app-rooted KMS
+	// pubkey is shared across all CVMs in one app, so encrypting against
+	// the bootstrap's pubkey produces bytes accepted by every CVM under
+	// the same app_id.
+	if envChanged && envCfg.HasAutoEnv {
+		current, err := r.fetchCVM(ctx, bootstrapID)
 		if err != nil {
-			resp.Diagnostics.AddError("Missing encrypted_env", err.Error())
+			resp.Diagnostics.AddError("Failed to load app encryption key", err.Error())
 			return
 		}
-		if err := r.client.PatchJSON(ctx, cvmPath(bootstrapID)+"/envs", envReq, nil); err != nil {
-			if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == 465 {
-				resp.Diagnostics.AddError(
-					"Encrypted env update requires on-chain verification",
-					"API returned HTTP 465 (compose hash registration required). Register compose_hash on-chain and retry with env_compose_hash and env_transaction_hash.",
-				)
-				return
-			}
-			resp.Diagnostics.AddError("Failed to update app encrypted env", err.Error())
+		pubkey := current.envEncryptionPubkey()
+		if pubkey == "" {
+			resp.Diagnostics.AddError(
+				"Missing encryption public key",
+				"Bootstrap CVM response did not include encrypted_env_pubkey. Use manual encrypted_env/env_keys mode.",
+			)
+			return
+		}
+		if err := envCfg.encryptAutoEnv(pubkey); err != nil {
+			resp.Diagnostics.AddError("Failed to encrypt env", err.Error())
+			return
+		}
+	}
+
+	if membersMode {
+		// Multi-CVM path: revision-based propagation for compose-body
+		// changes, per-CVM fan-out for env values / image / resources.
+		if diags := r.applyMembersModeUpdate(ctx, applyMembersModeArgs{
+			appID:           appID,
+			bootstrapID:     bootstrapID,
+			vmUUIDs:         collectVMUUIDs(cvms),
+			plan:            plan,
+			state:           state,
+			envCfg:          envCfg,
+			envChanged:      envChanged,
+			imageChanged:    imageChanged,
+			diskSizeChanged: diskSizeChanged,
+			composeEnvKeys:  composeEnvKeys,
+			composeHasKeys:  composeHasEnvKeys,
+			updateEnvKeys:   updateComposeEnvKeys,
+			settingsChanged: settingsChanged,
+		}); diags.HasError() {
+			resp.Diagnostics.Append(diags...)
+			return
+		}
+	} else {
+		// Single-CVM path: PATCH the bootstrap directly for each changed
+		// field. No fan-out because there's only one CVM. This is the
+		// minimal-API-call route that's worked since pre-0.3.
+		if diags := r.applySingleCVMUpdate(ctx, applySingleCVMArgs{
+			bootstrapID:     bootstrapID,
+			plan:            plan,
+			state:           state,
+			envCfg:          envCfg,
+			envChanged:      envChanged,
+			imageChanged:    imageChanged,
+			diskSizeChanged: diskSizeChanged,
+			composeEnvKeys:  composeEnvKeys,
+			composeHasKeys:  composeHasEnvKeys,
+			updateEnvKeys:   updateComposeEnvKeys,
+			settingsChanged: settingsChanged,
+		}); diags.HasError() {
+			resp.Diagnostics.Append(diags...)
 			return
 		}
 	}
 
 	if shouldWait(plan.WaitForReady) {
-		if err := r.waitForAppReady(ctx, appID, 1, waitTimeout(plan.WaitTimeoutSecond)); err != nil {
+		if err := r.waitForAppReady(ctx, appID, len(cvms), waitTimeout(plan.WaitTimeoutSecond)); err != nil {
 			resp.Diagnostics.AddError("App did not become ready", err.Error())
 			return
 		}
@@ -1192,102 +1091,6 @@ func planMembersFromAttribute(
 		return types.ListNull(types.StringType), false
 	}
 	return v, true
-}
-
-// configFieldMutated reports whether the user explicitly wrote a value at
-// `p` in HCL Config that differs from what's currently in State. Null in
-// Config means "user did not set this attribute" — for Optional+Computed
-// fields that's the default, not a mutation, so we return false. This is
-// the right comparison for our members-mode guardrail: the diff we care
-// about is user intent, not the noise produced by Computed-field churn on
-// every plan.
-func configFieldMutated(
-	ctx context.Context,
-	config, state interface {
-		GetAttribute(ctx context.Context, p path.Path, target interface{}) diag.Diagnostics
-	},
-	p path.Path,
-	diags *diag.Diagnostics,
-) bool {
-	var cv, sv attr.Value
-	diags.Append(config.GetAttribute(ctx, p, &cv)...)
-	diags.Append(state.GetAttribute(ctx, p, &sv)...)
-	if diags.HasError() {
-		return false
-	}
-	if cv == nil || cv.IsNull() {
-		// User didn't set this field in HCL — not a user-driven mutation.
-		return false
-	}
-	if sv == nil {
-		// State has no value but user set one. Treat as mutation.
-		return true
-	}
-	return !cv.Equal(sv)
-}
-
-// detectUnsafeMembersUpdate reports field changes that are unsafe to apply
-// in-place when phala_app is (or was) in members mode. The current
-// per-CVM PATCH endpoints update only one CVM at a time; in members mode
-// that would silently desync the named slots' compose/env/image. Worse,
-// the legacy reconcile-replicas path (which used to fan out via the
-// anonymous /replicas endpoint) is disabled in members mode for safety,
-// so any cloud-side mutation submitted at the app level cannot be
-// propagated to peer slots at all.
-//
-// Until the cloud exposes an app-revision-aware update endpoint that
-// preserves named slot identity, the safe answer is: don't try.
-//
-// Returns the set of changed attribute paths that triggered the block.
-// Empty slice means the update is safe to proceed with.
-func detectUnsafeMembersUpdate(plan, state appResourceModel) []path.Path {
-	var changed []path.Path
-	if !plan.DockerCompose.Equal(state.DockerCompose) {
-		changed = append(changed, path.Root("docker_compose"))
-	}
-	if !plan.PreLaunchScript.Equal(state.PreLaunchScript) {
-		changed = append(changed, path.Root("pre_launch_script"))
-	}
-	if !plan.Env.Equal(state.Env) {
-		changed = append(changed, path.Root("env"))
-	}
-	if !plan.EncryptedEnv.Equal(state.EncryptedEnv) {
-		changed = append(changed, path.Root("encrypted_env"))
-	}
-	if !plan.EnvKeys.Equal(state.EnvKeys) {
-		changed = append(changed, path.Root("env_keys"))
-	}
-	if !plan.EnvComposeHash.Equal(state.EnvComposeHash) {
-		changed = append(changed, path.Root("env_compose_hash"))
-	}
-	if !plan.EnvTransactionHash.Equal(state.EnvTransactionHash) {
-		changed = append(changed, path.Root("env_transaction_hash"))
-	}
-	if !plan.Image.Equal(state.Image) {
-		changed = append(changed, path.Root("image"))
-	}
-	if !plan.Size.Equal(state.Size) {
-		changed = append(changed, path.Root("size"))
-	}
-	if !plan.DiskSize.Equal(state.DiskSize) {
-		changed = append(changed, path.Root("disk_size"))
-	}
-	if !plan.PublicLogs.Equal(state.PublicLogs) {
-		changed = append(changed, path.Root("public_logs"))
-	}
-	if !plan.PublicSysinfo.Equal(state.PublicSysinfo) {
-		changed = append(changed, path.Root("public_sysinfo"))
-	}
-	if !plan.PublicTCBInfo.Equal(state.PublicTCBInfo) {
-		changed = append(changed, path.Root("public_tcbinfo"))
-	}
-	if !plan.GatewayEnabled.Equal(state.GatewayEnabled) {
-		changed = append(changed, path.Root("gateway_enabled"))
-	}
-	if !plan.SecureTime.Equal(state.SecureTime) {
-		changed = append(changed, path.Root("secure_time"))
-	}
-	return changed
 }
 
 func appIDFromState(state appResourceModel) string {
