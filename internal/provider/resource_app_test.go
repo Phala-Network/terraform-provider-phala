@@ -366,6 +366,156 @@ func TestAppResourcePopulateStateReportsCVMIDsInMembersMode(t *testing.T) {
 	}
 }
 
+// TestImageMatchesUserForm covers the cvmAPIResponse helper that decides
+// whether a user-supplied `image` value still refers to the same OS image
+// the cloud is now reporting. The cloud splits the image identity into
+// os.name + os.os_image_hash, but the `phala images` CLI displays the
+// combined `<name>-<short-hash>` form and users routinely copy that.
+// Both forms must be recognized so populateState can preserve the user's
+// input without tripping Terraform's post-apply consistency check.
+func TestImageMatchesUserForm(t *testing.T) {
+	osHash := "9b6a523983685016c0bf4a8a4ad930f86d283e5308c30e10fc0136db7c85f1fe"
+	cvm := cvmAPIResponse{
+		OS: &struct {
+			Name        string `json:"name"`
+			OSImageHash string `json:"os_image_hash"`
+		}{Name: "dstack-dev-0.5.7", OSImageHash: osHash},
+	}
+
+	cases := []struct {
+		name   string
+		input  string
+		expect bool
+	}{
+		{"bare name matches", "dstack-dev-0.5.7", true},
+		{"combined form with 8-char hash prefix", "dstack-dev-0.5.7-9b6a5239", true},
+		{"combined form with 4-char hash prefix", "dstack-dev-0.5.7-9b6a", true},
+		{"combined form with full hash", "dstack-dev-0.5.7-" + osHash, true},
+		{"uppercase hex tolerated", "dstack-dev-0.5.7-9B6A5239", true},
+		{"empty input", "", false},
+		{"different image name", "dstack-dev-0.6.0", false},
+		{"name prefix without separator", "dstack-dev-0.5.7x", false},
+		{"non-hex suffix", "dstack-dev-0.5.7-abcdxyz9", false},
+		{"hex prefix that does not match", "dstack-dev-0.5.7-deadbeef", false},
+		{"empty suffix after dash", "dstack-dev-0.5.7-", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cvm.imageMatchesUserForm(tc.input); got != tc.expect {
+				t.Fatalf("imageMatchesUserForm(%q) = %v, want %v", tc.input, got, tc.expect)
+			}
+		})
+	}
+
+	t.Run("no os hash falls back to name-only match", func(t *testing.T) {
+		bare := cvmAPIResponse{
+			OS: &struct {
+				Name        string `json:"name"`
+				OSImageHash string `json:"os_image_hash"`
+			}{Name: "dstack-dev-0.5.7"},
+		}
+		if !bare.imageMatchesUserForm("dstack-dev-0.5.7") {
+			t.Fatal("bare-name input should match when hash is absent")
+		}
+		if bare.imageMatchesUserForm("dstack-dev-0.5.7-9b6a5239") {
+			t.Fatal("combined form cannot be verified without os_image_hash; must not claim a match")
+		}
+	})
+}
+
+// TestAppResourcePopulateStatePreservesUserImageForm covers the populateState
+// branch that protects users who set `image` to the combined
+// "<name>-<short-hash>" form printed by the cloud's image catalog and the
+// `phala images` CLI. Before this fix, populateState always overwrote
+// state.Image with the bare os.name, which tripped Terraform Core's
+// post-apply consistency check on every Create with combined-form input
+// ("Provider produced inconsistent result after apply: .image was X but
+// now Y").
+func TestAppResourcePopulateStatePreservesUserImageForm(t *testing.T) {
+	ctx := context.Background()
+	hash := "9b6a523983685016c0bf4a8a4ad930f86d283e5308c30e10fc0136db7c85f1fe"
+	cvms := []cvmAPIResponse{
+		{
+			VMUUID: "vm-aaa",
+			Name:   "demo-0",
+			Status: "running",
+			OS: &struct {
+				Name        string `json:"name"`
+				OSImageHash string `json:"os_image_hash"`
+			}{Name: "dstack-dev-0.5.7", OSImageHash: hash},
+		},
+	}
+	app := &appAPIResponse{AppID: "app_test", Name: "demo-0"}
+
+	t.Run("combined form is preserved", func(t *testing.T) {
+		state := appResourceModel{
+			ID:            types.StringValue("app_test"),
+			AppID:         types.StringValue("app_test"),
+			Name:          types.StringValue("demo-0"),
+			Image:         types.StringValue("dstack-dev-0.5.7-9b6a5239"),
+			DockerCompose: types.StringValue("services:\n  app:\n"),
+		}
+		r := &appResource{}
+		if diags := r.populateState(ctx, &state, app, cvms); diags.HasError() {
+			t.Fatalf("populateState: %v", diags)
+		}
+		if got := state.Image.ValueString(); got != "dstack-dev-0.5.7-9b6a5239" {
+			t.Fatalf("combined-form image not preserved: got %q", got)
+		}
+	})
+
+	t.Run("bare name is preserved", func(t *testing.T) {
+		state := appResourceModel{
+			ID:            types.StringValue("app_test"),
+			AppID:         types.StringValue("app_test"),
+			Name:          types.StringValue("demo-0"),
+			Image:         types.StringValue("dstack-dev-0.5.7"),
+			DockerCompose: types.StringValue("services:\n  app:\n"),
+		}
+		r := &appResource{}
+		if diags := r.populateState(ctx, &state, app, cvms); diags.HasError() {
+			t.Fatalf("populateState: %v", diags)
+		}
+		if got := state.Image.ValueString(); got != "dstack-dev-0.5.7" {
+			t.Fatalf("bare image not preserved: got %q", got)
+		}
+	})
+
+	t.Run("unrelated prior value is overwritten with bare name", func(t *testing.T) {
+		state := appResourceModel{
+			ID:            types.StringValue("app_test"),
+			AppID:         types.StringValue("app_test"),
+			Name:          types.StringValue("demo-0"),
+			Image:         types.StringValue("dstack-dev-0.6.0-deadbeef"),
+			DockerCompose: types.StringValue("services:\n  app:\n"),
+		}
+		r := &appResource{}
+		if diags := r.populateState(ctx, &state, app, cvms); diags.HasError() {
+			t.Fatalf("populateState: %v", diags)
+		}
+		if got := state.Image.ValueString(); got != "dstack-dev-0.5.7" {
+			t.Fatalf("expected unrelated prior to be overwritten with bare os.name, got %q", got)
+		}
+	})
+
+	t.Run("null prior gets bare name", func(t *testing.T) {
+		state := appResourceModel{
+			ID:            types.StringValue("app_test"),
+			AppID:         types.StringValue("app_test"),
+			Name:          types.StringValue("demo-0"),
+			DockerCompose: types.StringValue("services:\n  app:\n"),
+		}
+		r := &appResource{}
+		if diags := r.populateState(ctx, &state, app, cvms); diags.HasError() {
+			t.Fatalf("populateState: %v", diags)
+		}
+		if got := state.Image.ValueString(); got != "dstack-dev-0.5.7" {
+			t.Fatalf("expected null prior to receive bare os.name, got %q", got)
+		}
+	})
+}
+
 func TestAppResourceWaitForAppReadyFailsFastOnStoppedReplica(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
