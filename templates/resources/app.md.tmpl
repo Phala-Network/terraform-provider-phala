@@ -38,6 +38,18 @@ Downstream `phala_app_instance` resources should set `for_each = toset(phala_app
 
 The one structural change still blocked is **removing the `members` attribute** from a previously-members-mode app: that would leave the `phala_app_instance` slots orphaned. The provider blocks this at plan time and asks you to destroy and recreate.
 
+## Public URL composition
+
+The cloud serves each CVM's containers behind a per-app gateway DNS suffix. Until 0.3.0-beta.3 downstream modules had to declare this suffix as a top-level variable and hardcode it per environment; the provider now exposes it as a computed attribute on the app:
+
+```hcl
+output "webdemo_url" {
+  value = "https://${phala_app.demo.app_id}-8080.${phala_app.demo.gateway_base_domain}"
+}
+```
+
+`gateway_base_domain` is sourced from the cloud's `CVMGatewayInfo.base_domain` on the primary CVM. If an operator has configured a custom CNAME alias via the cloud UI, `gateway_cname` carries it; otherwise it is empty. The same two fields are also published per-instance under `phala_app.instances[*]` and on every `phala_app_instance` resource, so per-slot URLs work the same way in members-mode.
+
 ## Migration from 0.2.x
 
 The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas` will fail validation. To migrate a multi-replica 0.2.x app, declare the slot names in `members` and add a `phala_app_instance` `for_each` over them. See [CHANGELOG](../../CHANGELOG.md#030-beta1---2026-05-18) for the recipe.

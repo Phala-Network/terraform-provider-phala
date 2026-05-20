@@ -72,6 +72,18 @@ that `phala_app.name` is one of `phala_app.members` and that the legacy
 `phala_app_instance` `for_each` directly from `phala_app.consul.members` so
 the two stay aligned by construction.
 
+## Public URL composition
+
+Each slot exposes `gateway_base_domain` (and `gateway_cname` when an alias has been configured) so per-instance URLs can be built without hardcoding the cloud's gateway suffix:
+
+```hcl
+output "consul_0_endpoint" {
+  value = "https://${phala_app.consul.app_id}-8500.${phala_app_instance.members["consul-0"].gateway_base_domain}"
+}
+```
+
+The gateway suffix is shared across every slot in an app, so reading it from any one slot is equivalent.
+
 ## Caveats
 
 - The Terraform ID is `<app_id>:<name>`. Import via

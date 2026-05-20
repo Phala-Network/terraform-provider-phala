@@ -4,9 +4,24 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0-beta.3] - 2026-05-20
+
+Surfaces the Phala Cloud gateway DNS info on `phala_app` and `phala_app_instance` so downstream consumers can build per-port public URLs from provider outputs instead of hardcoding the cloud's gateway domain. Also fixes a Create-time apply error that bit anyone setting `image` to the combined `<name>-<short-hash>` form.
+
+### Added
+
+- `phala_app.gateway_base_domain` (Computed) — default Phala Cloud gateway DNS suffix for the app's primary CVM, e.g. `dstack-pha-prod5.phala.network`. Downstream HCL composes public URLs as `https://<app_id>-<port>.<gateway_base_domain>` without having to predict the suffix.
+- `phala_app.gateway_cname` (Computed) — operator-configured CNAME alias for the app's gateway, if one has been set via the cloud UI. Empty when no custom CNAME is configured.
+- Same two fields surface on every entry of `phala_app.instances` and on `phala_app_instance` itself, so per-slot URL composition works the same way for both single-CVM and members-mode apps.
+- Values are sourced from `CVMGatewayInfo.base_domain` / `CVMGatewayInfo.cname` on the relevant CVM response. Helpers tolerate partial responses (no panic if `gateway` is absent or any member is nil) and trim incidental whitespace.
+
 ### Fixed
 
 - `phala_app.Create` no longer trips Terraform Core's "Provider produced inconsistent result after apply" check when `image` is set to the combined `<name>-<short-hash>` form printed by `phala images` and the cloud image catalog (e.g. `dstack-dev-0.5.7-9b6a5239`). The cloud splits the OS image into `os.name` + `os.os_image_hash` on the CVM response; `populateState` now preserves the user-supplied form when it semantically matches the same image, falling back to bare `os.name` only when no match can be proven. Both the bare-name and combined forms round-trip cleanly.
+
+### Motivation
+
+Until now, downstream stacks like [dstack-TEE/service-mesh](https://github.com/Dstack-TEE/service-mesh) had to declare a top-level `gateway_domain` variable and assemble URLs as `https://${phala_app.app_id}-8080.${var.gateway_domain}`. The variable was effectively hardcoded per environment and would silently drift if the cloud's default suffix changed. With these fields exposed, those modules can use `phala_app.gateway_base_domain` (or the per-instance equivalent) directly.
 
 ## [0.3.0-beta.2] - 2026-05-19
 

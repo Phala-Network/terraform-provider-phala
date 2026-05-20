@@ -51,6 +51,8 @@ type appInstanceResourceModel struct {
 	Region            types.String `tfsdk:"region"`
 	InstanceType      types.String `tfsdk:"instance_type"`
 	Endpoint          types.String `tfsdk:"endpoint"`
+	GatewayBaseDomain types.String `tfsdk:"gateway_base_domain"`
+	GatewayCname      types.String `tfsdk:"gateway_cname"`
 	CreatedAt         types.String `tfsdk:"created_at"`
 	Managed           types.Bool   `tfsdk:"managed"`
 }
@@ -198,6 +200,24 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"endpoint": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Primary public endpoint URL of the CVM.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"gateway_base_domain": schema.StringAttribute{
+				Computed: true,
+				MarkdownDescription: "Default Phala Cloud gateway DNS suffix for this CVM " +
+					"(e.g. `dstack-pha-prod5.phala.network`). Downstream callers compose " +
+					"per-port URLs as `https://<app_id>-<port>.<gateway_base_domain>` " +
+					"without having to predict the suffix.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"gateway_cname": schema.StringAttribute{
+				Computed: true,
+				MarkdownDescription: "Operator-configured CNAME alias for the gateway, if set " +
+					"via the Phala Cloud UI. Empty when no custom CNAME is configured.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -731,6 +751,8 @@ func populateAppInstanceState(state *appInstanceResourceModel, appID, name strin
 	state.Region = nullableString(cvm.region())
 	state.InstanceType = nullableString(cvm.instanceType())
 	state.Endpoint = nullableString(cvm.endpoint())
+	state.GatewayBaseDomain = nullableString(cvm.gatewayBaseDomain())
+	state.GatewayCname = nullableString(cvm.gatewayCname())
 	state.CreatedAt = nullableString(cvm.CreatedAt)
 }
 

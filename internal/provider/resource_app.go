@@ -62,34 +62,40 @@ type appResourceModel struct {
 	CVMIDs             types.List   `tfsdk:"cvm_ids"`
 	Instances          types.List   `tfsdk:"instances"`
 	Endpoint           types.String `tfsdk:"endpoint"`
+	GatewayBaseDomain  types.String `tfsdk:"gateway_base_domain"`
+	GatewayCname       types.String `tfsdk:"gateway_cname"`
 	Members            types.List   `tfsdk:"members"`
 }
 
 type appInstanceModel struct {
-	ID           types.String `tfsdk:"id"`
-	AppID        types.String `tfsdk:"app_id"`
-	Name         types.String `tfsdk:"name"`
-	VMUUID       types.String `tfsdk:"vm_uuid"`
-	InstanceID   types.String `tfsdk:"instance_id"`
-	Status       types.String `tfsdk:"status"`
-	Region       types.String `tfsdk:"region"`
-	InstanceType types.String `tfsdk:"instance_type"`
-	Endpoint     types.String `tfsdk:"endpoint"`
-	CreatedAt    types.String `tfsdk:"created_at"`
+	ID                types.String `tfsdk:"id"`
+	AppID             types.String `tfsdk:"app_id"`
+	Name              types.String `tfsdk:"name"`
+	VMUUID            types.String `tfsdk:"vm_uuid"`
+	InstanceID        types.String `tfsdk:"instance_id"`
+	Status            types.String `tfsdk:"status"`
+	Region            types.String `tfsdk:"region"`
+	InstanceType      types.String `tfsdk:"instance_type"`
+	Endpoint          types.String `tfsdk:"endpoint"`
+	GatewayBaseDomain types.String `tfsdk:"gateway_base_domain"`
+	GatewayCname      types.String `tfsdk:"gateway_cname"`
+	CreatedAt         types.String `tfsdk:"created_at"`
 }
 
 func appInstanceAttrTypes() map[string]attr.Type {
 	return map[string]attr.Type{
-		"id":            types.StringType,
-		"app_id":        types.StringType,
-		"name":          types.StringType,
-		"vm_uuid":       types.StringType,
-		"instance_id":   types.StringType,
-		"status":        types.StringType,
-		"region":        types.StringType,
-		"instance_type": types.StringType,
-		"endpoint":      types.StringType,
-		"created_at":    types.StringType,
+		"id":                  types.StringType,
+		"app_id":              types.StringType,
+		"name":                types.StringType,
+		"vm_uuid":             types.StringType,
+		"instance_id":         types.StringType,
+		"status":              types.StringType,
+		"region":              types.StringType,
+		"instance_type":       types.StringType,
+		"endpoint":            types.StringType,
+		"gateway_base_domain": types.StringType,
+		"gateway_cname":       types.StringType,
+		"created_at":          types.StringType,
 	}
 }
 
@@ -153,17 +159,39 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 		MarkdownDescription: "Computed per-instance view of CVMs currently attached to this app.",
 		NestedObject: schema.NestedAttributeObject{
 			Attributes: map[string]schema.Attribute{
-				"id":            schema.StringAttribute{Computed: true},
-				"app_id":        schema.StringAttribute{Computed: true},
-				"name":          schema.StringAttribute{Computed: true},
-				"vm_uuid":       schema.StringAttribute{Computed: true},
-				"instance_id":   schema.StringAttribute{Computed: true},
-				"status":        schema.StringAttribute{Computed: true},
-				"region":        schema.StringAttribute{Computed: true},
-				"instance_type": schema.StringAttribute{Computed: true},
-				"endpoint":      schema.StringAttribute{Computed: true},
-				"created_at":    schema.StringAttribute{Computed: true},
+				"id":                  schema.StringAttribute{Computed: true},
+				"app_id":              schema.StringAttribute{Computed: true},
+				"name":                schema.StringAttribute{Computed: true},
+				"vm_uuid":             schema.StringAttribute{Computed: true},
+				"instance_id":         schema.StringAttribute{Computed: true},
+				"status":              schema.StringAttribute{Computed: true},
+				"region":              schema.StringAttribute{Computed: true},
+				"instance_type":       schema.StringAttribute{Computed: true},
+				"endpoint":            schema.StringAttribute{Computed: true},
+				"gateway_base_domain": schema.StringAttribute{Computed: true},
+				"gateway_cname":       schema.StringAttribute{Computed: true},
+				"created_at":          schema.StringAttribute{Computed: true},
 			},
+		},
+	}
+	attrs["gateway_base_domain"] = schema.StringAttribute{
+		Computed: true,
+		MarkdownDescription: "Phala Cloud gateway base domain serving this app (e.g. " +
+			"`dstack-pha-prod5.phala.network`). Compose public URLs as " +
+			"`https://<app_id>-<port>.<gateway_base_domain>` " +
+			"without having to predict the value. Sourced from the cloud's " +
+			"`CVMGatewayInfo.base_domain` on the primary CVM.",
+		PlanModifiers: []planmodifier.String{
+			stringplanmodifier.UseStateForUnknown(),
+		},
+	}
+	attrs["gateway_cname"] = schema.StringAttribute{
+		Computed: true,
+		MarkdownDescription: "Operator-configured CNAME alias for this app's gateway, if one has " +
+			"been set via the cloud UI. Empty when not configured. Sourced from " +
+			"`CVMGatewayInfo.cname` on the primary CVM.",
+		PlanModifiers: []planmodifier.String{
+			stringplanmodifier.UseStateForUnknown(),
 		},
 	}
 	attrs["members"] = schema.ListAttribute{
@@ -831,6 +859,8 @@ func (r *appResource) populateState(
 		state.DiskSize = types.Int64Null()
 		state.Status = types.StringNull()
 		state.Endpoint = types.StringNull()
+		state.GatewayBaseDomain = types.StringNull()
+		state.GatewayCname = types.StringNull()
 		state.PrimaryCVMID = types.StringNull()
 		state.Instances = types.ListNull(appInstanceObjectType())
 		emptyIDs, listDiags := types.ListValueFrom(ctx, types.StringType, []string{})
@@ -901,6 +931,8 @@ func (r *appResource) populateState(
 		state.StorageFS = nullableString(primary.storageFSValue())
 		state.Status = nullableString(primary.Status)
 		state.Endpoint = nullableString(primary.endpoint())
+		state.GatewayBaseDomain = nullableString(primary.gatewayBaseDomain())
+		state.GatewayCname = nullableString(primary.gatewayCname())
 		if primary.Listed != nil {
 			state.Listed = types.BoolValue(*primary.Listed)
 		}
@@ -1194,16 +1226,18 @@ func buildAppInstances(ctx context.Context, cvms []cvmAPIResponse) (types.List, 
 	out := make([]appInstanceModel, 0, len(ordered))
 	for _, cvm := range ordered {
 		out = append(out, appInstanceModel{
-			ID:           nullableString(selectReplicaIdentifier(cvm)),
-			AppID:        nullableString(cvm.AppID),
-			Name:         nullableString(cvm.Name),
-			VMUUID:       nullableString(cvm.VMUUID),
-			InstanceID:   nullableString(cvm.InstanceID),
-			Status:       nullableString(cvm.Status),
-			Region:       nullableString(cvm.region()),
-			InstanceType: nullableString(cvm.instanceType()),
-			Endpoint:     nullableString(cvm.endpoint()),
-			CreatedAt:    nullableString(cvm.CreatedAt),
+			ID:                nullableString(selectReplicaIdentifier(cvm)),
+			AppID:             nullableString(cvm.AppID),
+			Name:              nullableString(cvm.Name),
+			VMUUID:            nullableString(cvm.VMUUID),
+			InstanceID:        nullableString(cvm.InstanceID),
+			Status:            nullableString(cvm.Status),
+			Region:            nullableString(cvm.region()),
+			InstanceType:      nullableString(cvm.instanceType()),
+			Endpoint:          nullableString(cvm.endpoint()),
+			GatewayBaseDomain: nullableString(cvm.gatewayBaseDomain()),
+			GatewayCname:      nullableString(cvm.gatewayCname()),
+			CreatedAt:         nullableString(cvm.CreatedAt),
 		})
 	}
 	value, valueDiags := types.ListValueFrom(ctx, appInstanceObjectType(), out)

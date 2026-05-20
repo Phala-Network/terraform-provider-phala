@@ -285,22 +285,26 @@ func envUpdateAppObjectType() tftypes.Object {
 		"cvm_ids":              tftypes.List{ElementType: tftypes.String},
 		"instances":            tftypes.List{ElementType: envUpdateInstanceObjectType()},
 		"endpoint":             tftypes.String,
+		"gateway_base_domain":  tftypes.String,
+		"gateway_cname":        tftypes.String,
 		"members":              tftypes.List{ElementType: tftypes.String},
 	}}
 }
 
 func envUpdateInstanceObjectType() tftypes.Object {
 	return tftypes.Object{AttributeTypes: map[string]tftypes.Type{
-		"id":            tftypes.String,
-		"app_id":        tftypes.String,
-		"name":          tftypes.String,
-		"vm_uuid":       tftypes.String,
-		"instance_id":   tftypes.String,
-		"status":        tftypes.String,
-		"region":        tftypes.String,
-		"instance_type": tftypes.String,
-		"endpoint":      tftypes.String,
-		"created_at":    tftypes.String,
+		"id":                  tftypes.String,
+		"app_id":              tftypes.String,
+		"name":                tftypes.String,
+		"vm_uuid":             tftypes.String,
+		"instance_id":         tftypes.String,
+		"status":              tftypes.String,
+		"region":              tftypes.String,
+		"instance_type":       tftypes.String,
+		"endpoint":            tftypes.String,
+		"gateway_base_domain": tftypes.String,
+		"gateway_cname":       tftypes.String,
+		"created_at":          tftypes.String,
 	}}
 }
 
@@ -344,6 +348,8 @@ func envUpdateConfigValue(t *testing.T, imageVal string) tftypes.Value {
 		"cvm_ids":              tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, nil),
 		"instances":            tftypes.NewValue(tftypes.List{ElementType: envUpdateInstanceObjectType()}, nil),
 		"endpoint":             tftypes.NewValue(tftypes.String, nil),
+		"gateway_base_domain":  tftypes.NewValue(tftypes.String, nil),
+		"gateway_cname":        tftypes.NewValue(tftypes.String, nil),
 		"members":              tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, nil),
 	})
 }
@@ -388,6 +394,8 @@ func envUpdateProposedCreate(t *testing.T, imageVal string) tftypes.Value {
 		"cvm_ids":              tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, tftypes.UnknownValue),
 		"instances":            tftypes.NewValue(tftypes.List{ElementType: envUpdateInstanceObjectType()}, tftypes.UnknownValue),
 		"endpoint":             tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
+		"gateway_base_domain":  tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
+		"gateway_cname":        tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
 		"members":              tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, nil),
 	})
 }
