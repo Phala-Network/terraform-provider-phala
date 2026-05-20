@@ -65,6 +65,13 @@ type cvmAPIResponse struct {
 	} `json:"node"`
 	OS *struct {
 		Name string `json:"name"`
+		// OSImageHash is the full hex digest of the OS image bytes. The
+		// cloud image catalog and the `phala images` CLI typically display
+		// the image as `<name>-<first-8-hex>`; users who copy that combined
+		// form into `image = ...` need the provider to recognize that it
+		// refers to the same image as the bare `name`. See
+		// resource_app.go:populateState for the round-trip logic.
+		OSImageHash string `json:"os_image_hash"`
 	} `json:"os"`
 	BaseImage      string `json:"base_image"`
 	PublicLogs     *bool  `json:"public_logs"`
@@ -131,6 +138,57 @@ func (r cvmAPIResponse) osImageName() string {
 		return strings.TrimSpace(r.BaseImage)
 	}
 	return ""
+}
+
+func (r cvmAPIResponse) osImageHash() string {
+	if r.OS == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.OS.OSImageHash)
+}
+
+// imageMatchesUserForm reports whether `userForm` refers to the same OS
+// image as this CVM. The cloud returns the OS image as two fields
+// (`os.name`, `os.os_image_hash`); the image catalog and the `phala images`
+// CLI display the same image as `<name>-<first-N-hex>`. Both forms are
+// valid user inputs and must round-trip without producing a state diff:
+//
+//   - bare name      ("dstack-dev-0.5.7")                — matches when
+//     userForm == os.name.
+//   - combined form  ("dstack-dev-0.5.7-9b6a5239")       — matches when
+//     userForm == os.name + "-" + prefix(os.os_image_hash, N) and the
+//     prefix portion is a strict hex prefix of os.os_image_hash.
+//
+// Returns false if the helper cannot prove a match — callers should then
+// overwrite state with the bare name.
+func (r cvmAPIResponse) imageMatchesUserForm(userForm string) bool {
+	name := r.osImageName()
+	if name == "" || userForm == "" {
+		return false
+	}
+	if userForm == name {
+		return true
+	}
+	if !strings.HasPrefix(userForm, name+"-") {
+		return false
+	}
+	suffix := userForm[len(name)+1:]
+	if suffix == "" {
+		return false
+	}
+	hash := r.osImageHash()
+	if hash == "" {
+		return false
+	}
+	if !strings.HasPrefix(hash, strings.ToLower(suffix)) {
+		return false
+	}
+	for _, c := range suffix {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r cvmAPIResponse) inProgress() bool {

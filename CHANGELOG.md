@@ -4,6 +4,10 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `phala_app.Create` no longer trips Terraform Core's "Provider produced inconsistent result after apply" check when `image` is set to the combined `<name>-<short-hash>` form printed by `phala images` and the cloud image catalog (e.g. `dstack-dev-0.5.7-9b6a5239`). The cloud splits the OS image into `os.name` + `os.os_image_hash` on the CVM response; `populateState` now preserves the user-supplied form when it semantically matches the same image, falling back to bare `os.name` only when no match can be proven. Both the bare-name and combined forms round-trip cleanly.
+
 ## [0.3.0-beta.2] - 2026-05-19
 
 In-place updates work in members (MIG) mode for all the fields users actually edit. The release-blocking guardrail from 0.3.0-beta.1 is gone.

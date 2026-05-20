@@ -880,7 +880,18 @@ func (r *appResource) populateState(
 			state.Region = types.StringValue(region)
 		}
 		if image := primary.osImageName(); image != "" {
-			state.Image = types.StringValue(image)
+			// The cloud splits the OS image into two response fields
+			// (`os.name` + `os.os_image_hash`), but users frequently set
+			// `image` to the combined `<name>-<short-hash>` form printed by
+			// the `phala images` CLI. Overwriting state with the bare name
+			// would trip Terraform Core's post-apply consistency check on
+			// every Create with combined-form input. Preserve the user's
+			// form whenever it still refers to the same image; only fall
+			// back to the bare name when we can't prove a match.
+			prior := state.Image.ValueString()
+			if !primary.imageMatchesUserForm(prior) {
+				state.Image = types.StringValue(image)
+			}
 		}
 		state.PublicLogs = nullableBool(primary.publicLogsValue())
 		state.PublicSysinfo = nullableBool(primary.publicSysinfoValue())
