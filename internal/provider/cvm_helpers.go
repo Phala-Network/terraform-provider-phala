@@ -95,6 +95,19 @@ type cvmAPIResponse struct {
 	PublicURLs []struct {
 		App string `json:"app"`
 	} `json:"public_urls"`
+
+	// Gateway carries the Phala Cloud gateway info for this CVM:
+	//   base_domain — the cloud's default gateway DNS suffix
+	//                 (e.g. "dstack-pha-prod5.phala.network"). Downstream
+	//                 callers compose URLs as
+	//                 https://<app_id>-<port>.<base_domain>
+	//                 without having to predict the value.
+	//   cname       — the operator-configured CNAME alias for the app,
+	//                 if one has been set via the cloud UI. Optional.
+	Gateway *struct {
+		BaseDomain *string `json:"base_domain"`
+		Cname      *string `json:"cname"`
+	} `json:"gateway"`
 }
 
 func (r cvmAPIResponse) idString() string {
@@ -220,6 +233,26 @@ func (r cvmAPIResponse) endpoint() string {
 		return r.PublicURLs[0].App
 	}
 	return ""
+}
+
+// gatewayBaseDomain returns the Phala Cloud gateway base domain for this
+// CVM, e.g. "dstack-pha-prod5.phala.network". Empty string when the cloud
+// did not include gateway info on the response (some legacy / partial
+// responses, or CVMs in early provisioning states).
+func (r cvmAPIResponse) gatewayBaseDomain() string {
+	if r.Gateway == nil || r.Gateway.BaseDomain == nil {
+		return ""
+	}
+	return strings.TrimSpace(*r.Gateway.BaseDomain)
+}
+
+// gatewayCname returns the operator-configured CNAME alias for the app,
+// if one is set on the cloud side. Empty when unset.
+func (r cvmAPIResponse) gatewayCname() string {
+	if r.Gateway == nil || r.Gateway.Cname == nil {
+		return ""
+	}
+	return strings.TrimSpace(*r.Gateway.Cname)
 }
 
 func (r cvmAPIResponse) publicLogsValue() *bool {

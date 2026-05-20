@@ -130,6 +130,18 @@ that `phala_app.name` is one of `phala_app.members` and that the legacy
 `phala_app_instance` `for_each` directly from `phala_app.consul.members` so
 the two stay aligned by construction.
 
+## Public URL composition
+
+Each slot exposes `gateway_base_domain` (and `gateway_cname` when an alias has been configured) so per-instance URLs can be built without hardcoding the cloud's gateway suffix:
+
+```hcl
+output "consul_0_endpoint" {
+  value = "https://${phala_app.consul.app_id}-8500.${phala_app_instance.members["consul-0"].gateway_base_domain}"
+}
+```
+
+The gateway suffix is shared across every slot in an app, so reading it from any one slot is equivalent.
+
 ## Caveats
 
 - The Terraform ID is `<app_id>:<name>`. Import via
@@ -176,6 +188,8 @@ the two stay aligned by construction.
 
 - `created_at` (String) CVM creation timestamp (ISO-8601).
 - `endpoint` (String) Primary public endpoint URL of the CVM.
+- `gateway_base_domain` (String) Default Phala Cloud gateway DNS suffix for this CVM (e.g. `dstack-pha-prod5.phala.network`). Downstream callers compose per-port URLs as `https://<app_id>-<port>.<gateway_base_domain>` without having to predict the suffix.
+- `gateway_cname` (String) Operator-configured CNAME alias for the gateway, if set via the Phala Cloud UI. Empty when no custom CNAME is configured.
 - `id` (String) Terraform ID. Format: `<app_id>:<name>`.
 - `instance_id` (String) Runtime/network identity reported by the cloud.
 - `instance_type` (String) Instance type (e.g. `tdx.small`) of the underlying CVM.

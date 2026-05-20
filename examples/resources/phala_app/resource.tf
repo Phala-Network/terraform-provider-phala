@@ -25,3 +25,11 @@ resource "phala_app" "web" {
   wait_for_ready       = true
   wait_timeout_seconds = 900
 }
+
+# The cloud's gateway DNS suffix is exposed as a computed attribute, so
+# downstream URLs can be assembled without hardcoding the environment-specific
+# domain. Each container port reachable via the gateway is published at
+# https://<app_id>-<port>.<gateway_base_domain>.
+output "web_url" {
+  value = "https://${phala_app.web.app_id}-80.${phala_app.web.gateway_base_domain}"
+}

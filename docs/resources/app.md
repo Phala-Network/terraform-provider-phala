@@ -39,6 +39,14 @@ resource "phala_app" "web" {
   wait_for_ready       = true
   wait_timeout_seconds = 900
 }
+
+# The cloud's gateway DNS suffix is exposed as a computed attribute, so
+# downstream URLs can be assembled without hardcoding the environment-specific
+# domain. Each container port reachable via the gateway is published at
+# https://<app_id>-<port>.<gateway_base_domain>.
+output "web_url" {
+  value = "https://${phala_app.web.app_id}-80.${phala_app.web.gateway_base_domain}"
+}
 ```
 
 ## Behavior Notes
@@ -65,6 +73,18 @@ Downstream `phala_app_instance` resources should set `for_each = toset(phala_app
 - **OS image, instance size, and disk size changes** fan out via `PATCH /cvms/{uuid}/os-image` and `PATCH /cvms/{uuid}/resources` respectively — the cloud has no app-level analog. Sequential, fail-fast.
 
 The one structural change still blocked is **removing the `members` attribute** from a previously-members-mode app: that would leave the `phala_app_instance` slots orphaned. The provider blocks this at plan time and asks you to destroy and recreate.
+
+## Public URL composition
+
+The cloud serves each CVM's containers behind a per-app gateway DNS suffix. Until 0.3.0-beta.3 downstream modules had to declare this suffix as a top-level variable and hardcode it per environment; the provider now exposes it as a computed attribute on the app:
+
+```hcl
+output "webdemo_url" {
+  value = "https://${phala_app.demo.app_id}-8080.${phala_app.demo.gateway_base_domain}"
+}
+```
+
+`gateway_base_domain` is sourced from the cloud's `CVMGatewayInfo.base_domain` on the primary CVM. If an operator has configured a custom CNAME alias via the cloud UI, `gateway_cname` carries it; otherwise it is empty. The same two fields are also published per-instance under `phala_app.instances[*]` and on every `phala_app_instance` resource, so per-slot URLs work the same way in members-mode.
 
 ## Migration from 0.2.x
 
@@ -111,6 +131,8 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `app_id` (String) Phala app identifier.
 - `cvm_ids` (List of String) Identifiers of every CVM currently attached to this app (bootstrap plus any `phala_app_instance`s).
 - `endpoint` (String) Primary public endpoint URL.
+- `gateway_base_domain` (String) Phala Cloud gateway base domain serving this app (e.g. `dstack-pha-prod5.phala.network`). Compose public URLs as `https://<app_id>-<port>.<gateway_base_domain>` without having to predict the value. Sourced from the cloud's `CVMGatewayInfo.base_domain` on the primary CVM.
+- `gateway_cname` (String) Operator-configured CNAME alias for this app's gateway, if one has been set via the cloud UI. Empty when not configured. Sourced from `CVMGatewayInfo.cname` on the primary CVM.
 - `id` (String) Terraform ID (same as app_id).
 - `instances` (Attributes List) Computed per-instance view of CVMs currently attached to this app. (see [below for nested schema](#nestedatt--instances))
 - `primary_cvm_id` (String) Bootstrap CVM identifier — the CVM created by `phala_app` itself, which in members (MIG) mode is also the slot whose name equals `phala_app.name`. This is the only CVM that `phala_app` mutates directly.
@@ -124,6 +146,8 @@ Read-Only:
 - `app_id` (String)
 - `created_at` (String)
 - `endpoint` (String)
+- `gateway_base_domain` (String)
+- `gateway_cname` (String)
 - `id` (String)
 - `instance_id` (String)
 - `instance_type` (String)

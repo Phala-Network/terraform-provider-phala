@@ -321,6 +321,89 @@ func TestAppResourcePopulateStateBuildsComputedInstances(t *testing.T) {
 	}
 }
 
+// TestAppResourcePopulateStatePopulatesGatewayFields covers the
+// gateway_base_domain / gateway_cname fields surfaced in 0.3.0-beta.3.
+// Downstream consumers (e.g. service-mesh) use these to compose per-port
+// URLs without hardcoding the cloud's DNS suffix; the values must appear
+// both on the top-level phala_app and on every computed instance entry.
+func TestAppResourcePopulateStatePopulatesGatewayFields(t *testing.T) {
+	ctx := context.Background()
+	state := appResourceModel{
+		ID:            types.StringValue("app_test"),
+		AppID:         types.StringValue("app_test"),
+		Name:          types.StringValue("demo-0"),
+		DockerCompose: types.StringValue("services:\n  app:\n"),
+	}
+	app := &appAPIResponse{AppID: "app_test", Name: "demo-0"}
+
+	bootstrapBase := "dstack-pha-prod5.phala.network"
+	bootstrapCname := "demo.example.com"
+	memberBase := "dstack-pha-prod5.phala.network"
+
+	cvms := []cvmAPIResponse{
+		{
+			VMUUID:    "vm-bootstrap",
+			Name:      "demo-0",
+			Status:    "running",
+			CreatedAt: "2026-05-19T10:00:00Z",
+			Endpoints: []struct {
+				App string `json:"app"`
+			}{{App: "https://bootstrap.example"}},
+			Gateway: &struct {
+				BaseDomain *string `json:"base_domain"`
+				Cname      *string `json:"cname"`
+			}{BaseDomain: &bootstrapBase, Cname: &bootstrapCname},
+		},
+		{
+			VMUUID:    "vm-member",
+			Name:      "demo-1",
+			Status:    "running",
+			CreatedAt: "2026-05-19T11:00:00Z",
+			Endpoints: []struct {
+				App string `json:"app"`
+			}{{App: "https://member.example"}},
+			Gateway: &struct {
+				BaseDomain *string `json:"base_domain"`
+				Cname      *string `json:"cname"`
+			}{BaseDomain: &memberBase},
+		},
+	}
+
+	resource := &appResource{}
+	diags := resource.populateState(ctx, &state, app, cvms)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+
+	if got := state.GatewayBaseDomain.ValueString(); got != bootstrapBase {
+		t.Fatalf("top-level gateway_base_domain = %q, want %q", got, bootstrapBase)
+	}
+	if got := state.GatewayCname.ValueString(); got != bootstrapCname {
+		t.Fatalf("top-level gateway_cname = %q, want %q", got, bootstrapCname)
+	}
+
+	var instances []appInstanceModel
+	diags = state.Instances.ElementsAs(ctx, &instances, false)
+	if diags.HasError() {
+		t.Fatalf("decode instances: %v", diags)
+	}
+	if len(instances) != 2 {
+		t.Fatalf("expected 2 instances, got %d", len(instances))
+	}
+	if got := instances[0].GatewayBaseDomain.ValueString(); got != bootstrapBase {
+		t.Fatalf("instances[0] gateway_base_domain = %q, want %q", got, bootstrapBase)
+	}
+	if got := instances[0].GatewayCname.ValueString(); got != bootstrapCname {
+		t.Fatalf("instances[0] gateway_cname = %q, want %q", got, bootstrapCname)
+	}
+	if got := instances[1].GatewayBaseDomain.ValueString(); got != memberBase {
+		t.Fatalf("instances[1] gateway_base_domain = %q, want %q", got, memberBase)
+	}
+	if !instances[1].GatewayCname.IsNull() {
+		t.Fatalf("instances[1] gateway_cname should be null when API omits cname, got %#v", instances[1].GatewayCname)
+	}
+}
+
 // TestAppResourcePopulateStateReportsCVMIDsInMembersMode replaces the
 // pre-0.3 "keep legacy replicas at 1 in members mode" test. With the
 // replicas attribute gone, the only post-Read invariant left to check is

@@ -124,6 +124,8 @@ func TestMergeCVMResponsePreservesStableBaseValuesAndRefreshesStatus(t *testing.
 
 func TestPopulateAppInstanceState(t *testing.T) {
 	state := appInstanceResourceModel{}
+	baseDomain := "dstack-pha-prod5.phala.network"
+	cname := "demo.example.com"
 	cvm := cvmAPIResponse{
 		VMUUID:     "vm-aaa",
 		InstanceID: "inst-1",
@@ -139,6 +141,10 @@ func TestPopulateAppInstanceState(t *testing.T) {
 		Endpoints: []struct {
 			App string `json:"app"`
 		}{{App: "https://example.com"}},
+		Gateway: &struct {
+			BaseDomain *string `json:"base_domain"`
+			Cname      *string `json:"cname"`
+		}{BaseDomain: &baseDomain, Cname: &cname},
 	}
 	populateAppInstanceState(&state, "app_test", "consul-0", cvm)
 
@@ -162,6 +168,56 @@ func TestPopulateAppInstanceState(t *testing.T) {
 	}
 	if state.Endpoint.ValueString() != "https://example.com" {
 		t.Fatalf("unexpected Endpoint: %q", state.Endpoint.ValueString())
+	}
+	if state.GatewayBaseDomain.ValueString() != baseDomain {
+		t.Fatalf("unexpected GatewayBaseDomain: %q", state.GatewayBaseDomain.ValueString())
+	}
+	if state.GatewayCname.ValueString() != cname {
+		t.Fatalf("unexpected GatewayCname: %q", state.GatewayCname.ValueString())
+	}
+}
+
+// TestGatewayHelpersMissingFields covers the partial-response cases where
+// the cloud omits the gateway block or one of its members, which downstream
+// callers rely on (we must return "" rather than panicking on nil deref).
+func TestGatewayHelpersMissingFields(t *testing.T) {
+	// No gateway block at all.
+	r := cvmAPIResponse{}
+	if got := r.gatewayBaseDomain(); got != "" {
+		t.Fatalf("nil gateway base_domain should be empty, got %q", got)
+	}
+	if got := r.gatewayCname(); got != "" {
+		t.Fatalf("nil gateway cname should be empty, got %q", got)
+	}
+
+	// Gateway present, both members nil.
+	r = cvmAPIResponse{
+		Gateway: &struct {
+			BaseDomain *string `json:"base_domain"`
+			Cname      *string `json:"cname"`
+		}{},
+	}
+	if got := r.gatewayBaseDomain(); got != "" {
+		t.Fatalf("nil base_domain pointer should be empty, got %q", got)
+	}
+	if got := r.gatewayCname(); got != "" {
+		t.Fatalf("nil cname pointer should be empty, got %q", got)
+	}
+
+	// Whitespace must be trimmed.
+	bd := "  dstack-pha-prod5.phala.network  "
+	cn := "  demo.example.com  "
+	r = cvmAPIResponse{
+		Gateway: &struct {
+			BaseDomain *string `json:"base_domain"`
+			Cname      *string `json:"cname"`
+		}{BaseDomain: &bd, Cname: &cn},
+	}
+	if got := r.gatewayBaseDomain(); got != "dstack-pha-prod5.phala.network" {
+		t.Fatalf("base_domain not trimmed: %q", got)
+	}
+	if got := r.gatewayCname(); got != "demo.example.com" {
+		t.Fatalf("cname not trimmed: %q", got)
 	}
 }
 
