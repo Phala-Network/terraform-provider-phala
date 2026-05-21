@@ -4,6 +4,17 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the provider's custom HTTP client and `oapi-codegen`-generated client with the official Phala Cloud Go SDK (`github.com/Phala-Network/phala-cloud/sdks/go`), eliminating ~37k lines of duplicated API code. All API calls now use typed SDK methods (`ProvisionCVM`, `GetCVMInfo`, `CreateAppInstance`, `UpdateCVMEnvs`, `UpdateOSImage`, `UpdateCVMResources`, `UpdateDockerCompose`, `UpdatePreLaunchScript`, `GetAppInfo`, `GetAppCVMs`, `DeleteCVM`, `RedeployAppRevision`, etc.).
+- Provider error diagnostics now surface SDK structured error codes (`error_code`, suggestions, links) via `APIError.IsStructured()` / `FormatError()`.
+
+### Removed
+
+- `internal/phalaapi/` (oapi-codegen output)
+- `openapi/` (vendored spec + generator)
+- Custom `APIClient`, `cvmAPIResponse`, `appAPIResponse` types — replaced by SDK equivalents.
+
 ## [0.3.0-beta.3] - 2026-05-20
 
 Surfaces the Phala Cloud gateway DNS info on `phala_app` and `phala_app_instance` so downstream consumers can build per-port public URLs from provider outputs instead of hardcoding the cloud's gateway domain. Also fixes a Create-time apply error that bit anyone setting `image` to the combined `<name>-<short-hash>` form.

@@ -136,19 +136,16 @@ func TestBuildProvisionReq(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if req["name"] != "test-cvm" {
-			t.Errorf("name = %v", req["name"])
+		if req.Name != "test-cvm" {
+			t.Errorf("name = %v", req.Name)
 		}
-		if req["instance_type"] != "tdx.small" {
-			t.Errorf("instance_type = %v", req["instance_type"])
+		if req.InstanceType != "tdx.small" {
+			t.Errorf("instance_type = %v", req.InstanceType)
 		}
-		if req["kms"] != "PHALA" {
-			t.Errorf("kms = %v", req["kms"])
+		if req.KMSType == nil || *req.KMSType != "PHALA" {
+			t.Errorf("kms = %v", req.KMSType)
 		}
-		if _, ok := req["region"]; ok {
-			t.Error("region should not be set when null")
-		}
-		if _, ok := req["teepod_id"]; ok {
+		if req.TeepodID != nil {
 			t.Error("teepod_id should not be set when HasNodeID is false")
 		}
 	})
@@ -174,29 +171,26 @@ func TestBuildProvisionReq(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if req["region"] != "us-east" {
-			t.Errorf("region = %v", req["region"])
+		if req.TeepodID == nil || *req.TeepodID != 42 {
+			t.Errorf("teepod_id = %v", req.TeepodID)
 		}
-		if req["teepod_id"] != int64(42) {
-			t.Errorf("teepod_id = %v", req["teepod_id"])
+		if req.KMSType == nil || *req.KMSType != "ETHEREUM" {
+			t.Errorf("kms = %v", req.KMSType)
 		}
-		if req["kms"] != "ETHEREUM" {
-			t.Errorf("kms = %v", req["kms"])
+		if req.Image == nil || *req.Image != "dstack-v0.3.5" {
+			t.Errorf("image = %v", req.Image)
 		}
-		if req["image"] != "dstack-v0.3.5" {
-			t.Errorf("image = %v", req["image"])
+		if req.CustomAppID == nil || *req.CustomAppID != "custom123" {
+			t.Errorf("app_id = %v", req.CustomAppID)
 		}
-		if req["app_id"] != "custom123" {
-			t.Errorf("app_id = %v", req["app_id"])
+		if req.Nonce == nil || *req.Nonce != 7 {
+			t.Errorf("nonce = %v", req.Nonce)
 		}
-		if req["nonce"] != int64(7) {
-			t.Errorf("nonce = %v", req["nonce"])
+		if req.DiskSize == nil || *req.DiskSize != 50 {
+			t.Errorf("disk_size = %v", req.DiskSize)
 		}
-		if req["disk_size"] != int64(50) {
-			t.Errorf("disk_size = %v", req["disk_size"])
-		}
-		if req["user_config"] == nil {
-			t.Error("user_config should be set")
+		if len(req.SSHAuthorizedKeys) != 1 {
+			t.Errorf("ssh_authorized_keys = %v", req.SSHAuthorizedKeys)
 		}
 	})
 }

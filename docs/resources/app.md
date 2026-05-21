@@ -155,6 +155,3 @@ Read-Only:
 - `region` (String)
 - `status` (String)
 - `vm_uuid` (String)
-
-
-

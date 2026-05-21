@@ -2,169 +2,61 @@ package provider
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/ecdh"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-// cvmAPIResponse is the common response structure returned by the Phala Cloud
-// CVM endpoints.  It is shared across resource_app, resource_cvm_power, and
-// resource_shared.
-type cvmAPIResponse struct {
-	ID         json.RawMessage `json:"id"`
-	Name       string          `json:"name"`
-	Status     string          `json:"status"`
-	CreatedAt  string          `json:"created_at"`
-	InProgress bool            `json:"in_progress"`
-	Listed     *bool           `json:"listed"`
-	AppID      string          `json:"app_id"`
-	VMUUID     string          `json:"vm_uuid"`
-	InstanceID string          `json:"instance_id"`
-	EnvPubkey  *string         `json:"encrypted_env_pubkey"`
-	KMSInfo    *struct {
-		EncryptedEnvPubkey string `json:"encrypted_env_pubkey"`
-	} `json:"kms_info"`
+// ---------------------------------------------------------------------------
+// CVMInfo accessor helpers
+// ---------------------------------------------------------------------------
 
-	Resource *struct {
-		InstanceType string `json:"instance_type"`
-		DiskInGB     *int64 `json:"disk_in_gb"`
-	} `json:"resource"`
-
-	InstanceType string `json:"instance_type"`
-	DiskSize     *int64 `json:"disk_size"`
-
-	// ComposeHash is the SHA-256 of the canonical app compose body the
-	// cloud believes this CVM is currently running. After the redeploy
-	// fan-out, each CVM's `compose_hash` flips from the old revision's
-	// value to the new one — used by waitForCVMsOnComposeHash to detect
-	// completion of the async update.
-	ComposeHash string `json:"compose_hash"`
-
-	Progress *struct {
-		Target string `json:"target"`
-	} `json:"progress"`
-
-	NodeInfo *struct {
-		Region string `json:"region"`
-	} `json:"node_info"`
-	Node *struct {
-		RegionIdentifier string `json:"region_identifier"`
-	} `json:"node"`
-	OS *struct {
-		Name string `json:"name"`
-		// OSImageHash is the full hex digest of the OS image bytes. The
-		// cloud image catalog and the `phala images` CLI typically display
-		// the image as `<name>-<first-8-hex>`; users who copy that combined
-		// form into `image = ...` need the provider to recognize that it
-		// refers to the same image as the bare `name`. See
-		// resource_app.go:populateState for the round-trip logic.
-		OSImageHash string `json:"os_image_hash"`
-	} `json:"os"`
-	BaseImage      string `json:"base_image"`
-	PublicLogs     *bool  `json:"public_logs"`
-	PublicSysinfo  *bool  `json:"public_sysinfo"`
-	PublicTCBInfo  *bool  `json:"public_tcbinfo"`
-	GatewayEnabled *bool  `json:"gateway_enabled"`
-	SecureTime     *bool  `json:"secure_time"`
-	StorageFS      string `json:"storage_fs"`
-	ComposeFile    *struct {
-		PublicLogs     *bool  `json:"public_logs"`
-		PublicSysinfo  *bool  `json:"public_sysinfo"`
-		PublicTCBInfo  *bool  `json:"public_tcbinfo"`
-		GatewayEnabled *bool  `json:"gateway_enabled"`
-		SecureTime     *bool  `json:"secure_time"`
-		StorageFS      string `json:"storage_fs"`
-	} `json:"compose_file"`
-
-	Endpoints []struct {
-		App string `json:"app"`
-	} `json:"endpoints"`
-	PublicURLs []struct {
-		App string `json:"app"`
-	} `json:"public_urls"`
-
-	// Gateway carries the Phala Cloud gateway info for this CVM:
-	//   base_domain — the cloud's default gateway DNS suffix
-	//                 (e.g. "dstack-pha-prod5.phala.network"). Downstream
-	//                 callers compose URLs as
-	//                 https://<app_id>-<port>.<base_domain>
-	//                 without having to predict the value.
-	//   cname       — the operator-configured CNAME alias for the app,
-	//                 if one has been set via the cloud UI. Optional.
-	Gateway *struct {
-		BaseDomain *string `json:"base_domain"`
-		Cname      *string `json:"cname"`
-	} `json:"gateway"`
+func cvmInfoIDString(info *phala.CVMInfo) string {
+	return strings.TrimSpace(info.IDString())
 }
 
-func (r cvmAPIResponse) idString() string {
-	if len(r.ID) == 0 {
+func cvmInfoEnvEncryptionPubkey(info *phala.CVMInfo) string {
+	if info.EncryptedEnvPubkey != nil && strings.TrimSpace(*info.EncryptedEnvPubkey) != "" {
+		return strings.TrimSpace(*info.EncryptedEnvPubkey)
+	}
+	if info.KMSInfo != nil && info.KMSInfo.EncryptedEnvPubkey != nil && strings.TrimSpace(*info.KMSInfo.EncryptedEnvPubkey) != "" {
+		return strings.TrimSpace(*info.KMSInfo.EncryptedEnvPubkey)
+	}
+	return ""
+}
+
+func cvmInfoOSImageName(info *phala.CVMInfo) string {
+	if info.OS != nil && info.OS.Name != nil && strings.TrimSpace(*info.OS.Name) != "" {
+		return strings.TrimSpace(*info.OS.Name)
+	}
+	if info.BaseImage != nil && strings.TrimSpace(*info.BaseImage) != "" {
+		return strings.TrimSpace(*info.BaseImage)
+	}
+	return ""
+}
+
+func cvmInfoOSImageHash(info *phala.CVMInfo) string {
+	if info.OS == nil || info.OS.OSImageHash == nil {
 		return ""
 	}
-
-	var asString string
-	if err := json.Unmarshal(r.ID, &asString); err == nil {
-		return strings.TrimSpace(asString)
-	}
-
-	var asInt int64
-	if err := json.Unmarshal(r.ID, &asInt); err == nil {
-		return strconv.FormatInt(asInt, 10)
-	}
-
-	var asFloat float64
-	if err := json.Unmarshal(r.ID, &asFloat); err == nil {
-		return strconv.FormatInt(int64(asFloat), 10)
-	}
-
-	return ""
+	return strings.TrimSpace(*info.OS.OSImageHash)
 }
 
-func (r cvmAPIResponse) envEncryptionPubkey() string {
-	if r.EnvPubkey != nil && strings.TrimSpace(*r.EnvPubkey) != "" {
-		return strings.TrimSpace(*r.EnvPubkey)
-	}
-	if r.KMSInfo != nil && strings.TrimSpace(r.KMSInfo.EncryptedEnvPubkey) != "" {
-		return strings.TrimSpace(r.KMSInfo.EncryptedEnvPubkey)
-	}
-	return ""
-}
-
-func (r cvmAPIResponse) osImageName() string {
-	if r.OS != nil && strings.TrimSpace(r.OS.Name) != "" {
-		return strings.TrimSpace(r.OS.Name)
-	}
-	if strings.TrimSpace(r.BaseImage) != "" {
-		return strings.TrimSpace(r.BaseImage)
-	}
-	return ""
-}
-
-func (r cvmAPIResponse) osImageHash() string {
-	if r.OS == nil {
-		return ""
-	}
-	return strings.TrimSpace(r.OS.OSImageHash)
-}
-
-// imageMatchesUserForm reports whether `userForm` refers to the same OS
-// image as this CVM. The cloud returns the OS image as two fields
-// (`os.name`, `os.os_image_hash`); the image catalog and the `phala images`
-// CLI display the same image as `<name>-<first-N-hex>`. Both forms are
-// valid user inputs and must round-trip without producing a state diff:
+// cvmInfoImageMatchesUserForm reports whether `userForm` refers to the
+// same OS image as this CVM. The cloud returns the OS image as two
+// fields (`os.name`, `os.os_image_hash`); the image catalog and the
+// `phala images` CLI display the same image as `<name>-<first-N-hex>`.
+// Both forms are valid user inputs and must round-trip without producing
+// a state diff:
 //
 //   - bare name      ("dstack-dev-0.5.7")                — matches when
 //     userForm == os.name.
@@ -172,10 +64,10 @@ func (r cvmAPIResponse) osImageHash() string {
 //     userForm == os.name + "-" + prefix(os.os_image_hash, N) and the
 //     prefix portion is a strict hex prefix of os.os_image_hash.
 //
-// Returns false if the helper cannot prove a match — callers should then
-// overwrite state with the bare name.
-func (r cvmAPIResponse) imageMatchesUserForm(userForm string) bool {
-	name := r.osImageName()
+// Returns false if the helper cannot prove a match — callers should
+// then overwrite state with the bare name.
+func cvmInfoImageMatchesUserForm(info *phala.CVMInfo, userForm string) bool {
+	name := cvmInfoOSImageName(info)
 	if name == "" || userForm == "" {
 		return false
 	}
@@ -189,7 +81,7 @@ func (r cvmAPIResponse) imageMatchesUserForm(userForm string) bool {
 	if suffix == "" {
 		return false
 	}
-	hash := r.osImageHash()
+	hash := cvmInfoOSImageHash(info)
 	if hash == "" {
 		return false
 	}
@@ -204,97 +96,100 @@ func (r cvmAPIResponse) imageMatchesUserForm(userForm string) bool {
 	return true
 }
 
-func (r cvmAPIResponse) inProgress() bool {
-	return r.InProgress || (r.Progress != nil && strings.TrimSpace(r.Progress.Target) != "")
+func cvmInfoInProgress(info *phala.CVMInfo) bool {
+	return info.InProgress || (info.Progress != nil && info.Progress.Target != nil && strings.TrimSpace(*info.Progress.Target) != "")
 }
 
-func (r cvmAPIResponse) instanceType() string {
-	if r.Resource != nil && strings.TrimSpace(r.Resource.InstanceType) != "" {
-		return r.Resource.InstanceType
-	}
-	return r.InstanceType
-}
-
-func (r cvmAPIResponse) region() string {
-	if r.NodeInfo != nil && strings.TrimSpace(r.NodeInfo.Region) != "" {
-		return r.NodeInfo.Region
-	}
-	if r.Node != nil && strings.TrimSpace(r.Node.RegionIdentifier) != "" {
-		return r.Node.RegionIdentifier
+func cvmInfoInstanceType(info *phala.CVMInfo) string {
+	if info.Resource.InstanceType != nil && strings.TrimSpace(*info.Resource.InstanceType) != "" {
+		return *info.Resource.InstanceType
 	}
 	return ""
 }
 
-func (r cvmAPIResponse) endpoint() string {
-	if len(r.Endpoints) > 0 && strings.TrimSpace(r.Endpoints[0].App) != "" {
-		return r.Endpoints[0].App
-	}
-	if len(r.PublicURLs) > 0 && strings.TrimSpace(r.PublicURLs[0].App) != "" {
-		return r.PublicURLs[0].App
+func cvmInfoRegion(info *phala.CVMInfo) string {
+	if info.NodeInfo != nil && info.NodeInfo.Region != nil && strings.TrimSpace(*info.NodeInfo.Region) != "" {
+		return *info.NodeInfo.Region
 	}
 	return ""
 }
 
-// gatewayBaseDomain returns the Phala Cloud gateway base domain for this
-// CVM, e.g. "dstack-pha-prod5.phala.network". Empty string when the cloud
-// did not include gateway info on the response (some legacy / partial
-// responses, or CVMs in early provisioning states).
-func (r cvmAPIResponse) gatewayBaseDomain() string {
-	if r.Gateway == nil || r.Gateway.BaseDomain == nil {
+// cvmInfoGatewayBaseDomain returns the Phala Cloud gateway base domain
+// for this CVM, e.g. "dstack-pha-prod5.phala.network". Empty string
+// when the cloud did not include gateway info on the response (some
+// legacy / partial responses, or CVMs in early provisioning states).
+func cvmInfoGatewayBaseDomain(info *phala.CVMInfo) string {
+	if info.Gateway == nil || info.Gateway.BaseDomain == nil {
 		return ""
 	}
-	return strings.TrimSpace(*r.Gateway.BaseDomain)
+	return strings.TrimSpace(*info.Gateway.BaseDomain)
 }
 
-// gatewayCname returns the operator-configured CNAME alias for the app,
-// if one is set on the cloud side. Empty when unset.
-func (r cvmAPIResponse) gatewayCname() string {
-	if r.Gateway == nil || r.Gateway.Cname == nil {
+// cvmInfoGatewayCname returns the operator-configured CNAME alias for
+// the app, if one is set on the cloud side. Empty when unset.
+func cvmInfoGatewayCname(info *phala.CVMInfo) string {
+	if info.Gateway == nil || info.Gateway.CNAME == nil {
 		return ""
 	}
-	return strings.TrimSpace(*r.Gateway.Cname)
+	return strings.TrimSpace(*info.Gateway.CNAME)
 }
 
-func (r cvmAPIResponse) publicLogsValue() *bool {
-	if r.ComposeFile != nil && r.ComposeFile.PublicLogs != nil {
-		return r.ComposeFile.PublicLogs
+func cvmInfoEndpoint(info *phala.CVMInfo) string {
+	if len(info.Endpoints) > 0 && strings.TrimSpace(info.Endpoints[0].App) != "" {
+		return info.Endpoints[0].App
 	}
-	return r.PublicLogs
+	if len(info.PublicURLs) > 0 && strings.TrimSpace(info.PublicURLs[0].App) != "" {
+		return info.PublicURLs[0].App
+	}
+	return ""
 }
 
-func (r cvmAPIResponse) publicSysinfoValue() *bool {
-	if r.ComposeFile != nil && r.ComposeFile.PublicSysinfo != nil {
-		return r.ComposeFile.PublicSysinfo
-	}
-	return r.PublicSysinfo
+func cvmInfoPublicLogsValue(info *phala.CVMInfo) *bool {
+	return info.PublicLogs
 }
 
-func (r cvmAPIResponse) publicTCBInfoValue() *bool {
-	if r.ComposeFile != nil && r.ComposeFile.PublicTCBInfo != nil {
-		return r.ComposeFile.PublicTCBInfo
-	}
-	return r.PublicTCBInfo
+func cvmInfoPublicSysinfoValue(info *phala.CVMInfo) *bool {
+	return info.PublicSysinfo
 }
 
-func (r cvmAPIResponse) gatewayEnabledValue() *bool {
-	if r.ComposeFile != nil && r.ComposeFile.GatewayEnabled != nil {
-		return r.ComposeFile.GatewayEnabled
-	}
-	return r.GatewayEnabled
+func cvmInfoPublicTCBInfoValue(info *phala.CVMInfo) *bool {
+	return info.PublicTcbinfo
 }
 
-func (r cvmAPIResponse) secureTimeValue() *bool {
-	if r.ComposeFile != nil && r.ComposeFile.SecureTime != nil {
-		return r.ComposeFile.SecureTime
-	}
-	return r.SecureTime
+func cvmInfoGatewayEnabledValue(info *phala.CVMInfo) *bool {
+	return info.GatewayEnabled
 }
 
-func (r cvmAPIResponse) storageFSValue() string {
-	if r.ComposeFile != nil && strings.TrimSpace(r.ComposeFile.StorageFS) != "" {
-		return r.ComposeFile.StorageFS
+func cvmInfoSecureTimeValue(info *phala.CVMInfo) *bool {
+	return info.SecureTime
+}
+
+func cvmInfoStorageFSValue(info *phala.CVMInfo) string {
+	if info.StorageFS != nil && strings.TrimSpace(*info.StorageFS) != "" {
+		return *info.StorageFS
 	}
-	return r.StorageFS
+	return ""
+}
+
+func cvmInfoVMUUID(info *phala.CVMInfo) string {
+	if info.VMUUID != nil {
+		return strings.TrimSpace(*info.VMUUID)
+	}
+	return ""
+}
+
+func cvmInfoAppID(info *phala.CVMInfo) string {
+	if info.AppID != nil {
+		return strings.TrimSpace(*info.AppID)
+	}
+	return ""
+}
+
+func cvmInfoInstanceID(info *phala.CVMInfo) string {
+	if info.InstanceID != nil {
+		return strings.TrimSpace(*info.InstanceID)
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------
@@ -305,15 +200,15 @@ func cvmPath(id string) string {
 	return "/cvms/" + url.PathEscape(id)
 }
 
-func selectCVMIdentifier(resp cvmAPIResponse, provisionAppID string) string {
-	if id := resp.idString(); id != "" {
+func selectCVMIdentifier(info *phala.CVMInfo, provisionAppID string) string {
+	if id := cvmInfoIDString(info); id != "" {
 		return id
 	}
-	if strings.TrimSpace(resp.VMUUID) != "" {
-		return resp.VMUUID
+	if vmUUID := cvmInfoVMUUID(info); vmUUID != "" {
+		return vmUUID
 	}
-	if strings.TrimSpace(resp.AppID) != "" {
-		return ensureAppPrefix(resp.AppID)
+	if appID := cvmInfoAppID(info); appID != "" {
+		return ensureAppPrefix(appID)
 	}
 	if strings.TrimSpace(provisionAppID) != "" {
 		return ensureAppPrefix(provisionAppID)
@@ -341,7 +236,7 @@ func ensureAppPrefix(v string) string {
 
 func provisionAndApplyComposeFileUpdate(
 	ctx context.Context,
-	client *APIClient,
+	client *phala.Client,
 	cvmID string,
 	provisionReq map[string]any,
 ) error {
@@ -352,23 +247,30 @@ func provisionAndApplyComposeFileUpdate(
 		return fmt.Errorf("compose update requires non-empty name")
 	}
 
-	var provisionResp struct {
-		ComposeHash string `json:"compose_hash"`
+	// Convert map[string]any to the SDK type via JSON round-trip.
+	provisionBody, err := json.Marshal(provisionReq)
+	if err != nil {
+		return fmt.Errorf("marshal compose provision request: %w", err)
 	}
-	if err := client.PostJSON(ctx, cvmPath(cvmID)+"/compose_file/provision", provisionReq, &provisionResp); err != nil {
+	sdkReq := &phala.ProvisionComposeUpdateRequest{}
+	if err := json.Unmarshal(provisionBody, sdkReq); err != nil {
+		return fmt.Errorf("convert compose provision request: %w", err)
+	}
+	resp, err := client.ProvisionCVMComposeFileUpdate(ctx, cvmID, sdkReq)
+	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(provisionResp.ComposeHash) == "" {
+	if strings.TrimSpace(resp.ComposeHash) == "" {
 		return fmt.Errorf("compose update provision did not return compose_hash")
 	}
 
-	triggerReq := map[string]any{
-		"compose_hash": provisionResp.ComposeHash,
+	commitReq := &phala.CommitComposeUpdateRequest{
+		ComposeHash: resp.ComposeHash,
 	}
-	if err := client.PatchJSON(ctx, cvmPath(cvmID)+"/compose_file", triggerReq, nil); err != nil {
-		return err
+	if updateEnvVars, ok := provisionReq["update_env_vars"].(bool); ok && updateEnvVars {
+		commitReq.UpdateEnvVars = &updateEnvVars
 	}
-	return nil
+	return client.CommitCVMComposeFileUpdate(ctx, cvmID, commitReq)
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +282,20 @@ func nullableString(v string) types.String {
 		return types.StringNull()
 	}
 	return types.StringValue(v)
+}
+
+func nullableBool(v *bool) types.Bool {
+	if v == nil {
+		return types.BoolNull()
+	}
+	return types.BoolValue(*v)
+}
+
+func nullableStringPtr(v *string) types.String {
+	if v == nil || strings.TrimSpace(*v) == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(strings.TrimSpace(*v))
 }
 
 func waitTimeout(v types.Int64) time.Duration {
@@ -492,8 +408,6 @@ func knownOptionalInt64(value types.Int64, fieldName string) (int64, bool, diag.
 // Provisioning identity helpers
 // ---------------------------------------------------------------------------
 
-// provisionIdentity holds the resolved KMS and custom app identity values
-// for a provision request.
 type provisionIdentity struct {
 	KMSType        string
 	CustomAppID    string
@@ -626,72 +540,21 @@ func encryptEnvMap(env map[string]string, publicKeyBase64 string) (string, error
 		return "", fmt.Errorf("invalid env encryption key length: expected 32 bytes, got %d", len(pubkeyBytes))
 	}
 
-	curve := ecdh.X25519()
-	remotePub, err := curve.NewPublicKey(pubkeyBytes)
-	if err != nil {
-		return "", fmt.Errorf("parse env encryption key: %w", err)
-	}
-	ephemeralPriv, err := curve.GenerateKey(rand.Reader)
-	if err != nil {
-		return "", fmt.Errorf("generate ephemeral key: %w", err)
-	}
-
-	sharedSecret, err := ephemeralPriv.ECDH(remotePub)
-	if err != nil {
-		return "", fmt.Errorf("derive shared secret: %w", err)
-	}
-	if len(sharedSecret) < 32 {
-		return "", fmt.Errorf("invalid shared secret length: %d", len(sharedSecret))
-	}
-
-	block, err := aes.NewCipher(sharedSecret[:32])
-	if err != nil {
-		return "", fmt.Errorf("create AES cipher: %w", err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("create AES-GCM cipher: %w", err)
-	}
-	nonce := make([]byte, aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return "", fmt.Errorf("generate nonce: %w", err)
-	}
-
-	type envVar struct {
-		Key   string `json:"key"`
-		Value string `json:"value"`
-	}
-
 	keys := make([]string, 0, len(env))
 	for key := range env {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 
-	envVars := make([]envVar, 0, len(keys))
+	envVars := make([]phala.EnvVar, 0, len(keys))
 	for _, key := range keys {
-		envVars = append(envVars, envVar{
+		envVars = append(envVars, phala.EnvVar{
 			Key:   key,
 			Value: env[key],
 		})
 	}
 
-	plaintext, err := json.Marshal(map[string][]envVar{
-		"env": envVars,
-	})
-	if err != nil {
-		return "", fmt.Errorf("marshal env payload: %w", err)
-	}
-
-	ephemeralPub := ephemeralPriv.PublicKey().Bytes()
-	ciphertext := aead.Seal(nil, nonce, plaintext, nil)
-
-	out := make([]byte, 0, len(ephemeralPub)+len(nonce)+len(ciphertext))
-	out = append(out, ephemeralPub...)
-	out = append(out, nonce...)
-	out = append(out, ciphertext...)
-
-	return hex.EncodeToString(out), nil
+	return phala.EncryptEnvVars(envVars, hex.EncodeToString(pubkeyBytes))
 }
 
 func decodeEnvPublicKey(v string) ([]byte, error) {
@@ -702,12 +565,10 @@ func decodeEnvPublicKey(v string) ([]byte, error) {
 	trimmed = strings.TrimPrefix(trimmed, "0x")
 	trimmed = strings.TrimPrefix(trimmed, "0X")
 
-	// Newer API versions return a hex-encoded X25519 public key.
 	if out, err := hex.DecodeString(trimmed); err == nil && len(out) == 32 {
 		return out, nil
 	}
 
-	// Backward compatibility for legacy base64 responses.
 	if out, err := base64.StdEncoding.DecodeString(trimmed); err == nil {
 		return out, nil
 	}
@@ -737,14 +598,68 @@ func normalizeTextBody(raw string) string {
 }
 
 func isNotFound(err error) bool {
-	apiErr, ok := err.(*APIError)
+	apiErr, ok := err.(*phala.APIError)
 	return ok && apiErr.StatusCode == 404
 }
 
 func isRetryable(err error) bool {
-	apiErr, ok := err.(*APIError)
+	apiErr, ok := err.(*phala.APIError)
 	if !ok {
 		return false
 	}
-	return isRetryableStatus(apiErr.StatusCode)
+	return apiErr.IsRetryable()
+}
+
+// diagnosticFromAPIError extracts structured diagnostic info from an API error.
+// Returns (summary, detail) suitable for resp.Diagnostics.AddError().
+func diagnosticFromAPIError(fallbackSummary string, err error) (string, string) {
+	apiErr, ok := err.(*phala.APIError)
+	if !ok {
+		return fallbackSummary, err.Error()
+	}
+	if apiErr.IsStructured() {
+		return fmt.Sprintf("[%s] %s", apiErr.ErrorCode, apiErr.Message), apiErr.FormatError()
+	}
+	return fallbackSummary, apiErr.Error()
+}
+
+// composeEnvKeysFromAttrs derives the list of allowed_env keys for an app compose.
+// Prefers the env map (returning its sorted keys) and falls back to an explicit
+// env_keys list. Returns (keys, hasKeys, diagnostics).
+func composeEnvKeysFromAttrs(ctx context.Context, env types.Map, envKeys types.List) ([]string, bool, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	if !env.IsNull() && !env.IsUnknown() {
+		envMap, mapDiags := mapValueAsStrings(ctx, env, "env")
+		diags.Append(mapDiags...)
+		if diags.HasError() {
+			return nil, false, diags
+		}
+		return sortedEnvKeys(envMap), true, diags
+	}
+
+	if !envKeys.IsNull() && !envKeys.IsUnknown() {
+		keys, listDiags := listValueAsStrings(ctx, envKeys, "env_keys")
+		diags.Append(listDiags...)
+		if diags.HasError() {
+			return nil, false, diags
+		}
+		sort.Strings(keys)
+		return keys, true, diags
+	}
+
+	return nil, false, diags
+}
+
+// equalStringSlices compares two string slices for order-sensitive equality.
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

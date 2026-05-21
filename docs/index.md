@@ -92,5 +92,3 @@ The provider uses the public Phala Cloud API by default. Most users do not need 
 - `api_prefix` (String) Phala Cloud API base URL. Can also be set by PHALA_CLOUD_API_PREFIX.
 - `api_version` (String) Phala API version sent in X-Phala-Version header.
 - `timeout_seconds` (Number) HTTP timeout in seconds.
-
-

@@ -2,9 +2,11 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strings"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -14,7 +16,7 @@ import (
 var _ datasource.DataSource = &sizesDataSource{}
 
 type sizesDataSource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type sizesDataSourceModel struct {
@@ -76,11 +78,11 @@ func (d *sizesDataSource) Configure(_ context.Context, req datasource.ConfigureR
 		return
 	}
 
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring sizes data source.",
+			"Expected *phala.Client while configuring sizes data source.",
 		)
 		return
 	}
@@ -104,6 +106,20 @@ func (d *sizesDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		return
 	}
 
+	// SDK returns map[string]any — re-encode to JSON and decode into the
+	// local struct that matches the expected API shape.
+	raw, err := d.client.ListAllInstanceTypeFamilies(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to list sizes", err.Error())
+		return
+	}
+
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to encode instance types response", err.Error())
+		return
+	}
+
 	var payload struct {
 		Result []struct {
 			Name  string `json:"name"`
@@ -121,8 +137,8 @@ func (d *sizesDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		} `json:"result"`
 	}
 
-	if err := d.client.GetJSON(ctx, "/instance-types", &payload); err != nil {
-		resp.Diagnostics.AddError("Failed to list sizes", err.Error())
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		resp.Diagnostics.AddError("Failed to decode instance types response", err.Error())
 		return
 	}
 

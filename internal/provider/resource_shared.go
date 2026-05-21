@@ -3,12 +3,12 @@ package provider
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"strings"
 	"time"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -118,7 +118,6 @@ func sharedCVMSchemaAttrs() map[string]schema.Attribute {
 			Computed:            true,
 			MarkdownDescription: "Storage filesystem for deployment (`zfs` or `ext4`). Immutable after initial deployment.",
 			PlanModifiers: []planmodifier.String{
-				stringplanmodifier.UseStateForUnknown(),
 				stringplanmodifier.RequiresReplace(),
 			},
 		},
@@ -147,9 +146,11 @@ func sharedCVMSchemaAttrs() map[string]schema.Attribute {
 		"env": schema.MapAttribute{
 			Optional:    true,
 			ElementType: types.StringType,
-			MarkdownDescription: "Plaintext env vars. Values are encrypted before API submission, " +
-				"but plaintext is stored in Terraform state — pass secret values via variables " +
-				"marked `sensitive = true` to redact them in plan output.",
+			MarkdownDescription: "Plaintext env vars. Provider auto-derives env_keys and encrypts values " +
+				"before API submission. Plaintext still exists in Terraform state. " +
+				"Mark sensitive values at the variable level rather than the schema level " +
+				"(see Phala-Network/phala-cloud#246: schema-level Sensitive on a Map " +
+				"causes Terraform Core to suppress in-place env diffs).",
 		},
 		"encrypted_env": schema.StringAttribute{
 			Optional:            true,
@@ -288,77 +289,118 @@ type provisionFields struct {
 	SSHAuthorizedKeys []string
 }
 
-func buildProvisionReq(f provisionFields) (map[string]any, error) {
-	req := map[string]any{
-		"name":          f.Name,
-		"instance_type": f.Size,
-		"compose_file":  f.ComposeFile,
-		"kms":           kmsPayloadValue(f.KMS),
-		"listed":        f.Listed,
+func buildProvisionReq(f provisionFields) (*phala.ProvisionCVMRequest, error) {
+	kms := kmsPayloadValue(f.KMS)
+	listed := f.Listed
+	req := &phala.ProvisionCVMRequest{
+		Name:         f.Name,
+		InstanceType: f.Size,
+		KMSType:      &kms,
+		Listed:       &listed,
 	}
+
+	// Build ComposeFile from the map representation.
+	if f.ComposeFile != nil {
+		cf := &phala.ComposeFile{}
+		if v, ok := f.ComposeFile["name"].(string); ok {
+			cf.Name = v
+		}
+		if v, ok := f.ComposeFile["docker_compose_file"].(string); ok {
+			cf.DockerComposeFile = v
+		}
+		if v, ok := f.ComposeFile["pre_launch_script"].(string); ok {
+			cf.PreLaunchScript = &v
+		}
+		if v, ok := f.ComposeFile["gateway_enabled"].(bool); ok {
+			cf.GatewayEnabled = &v
+		}
+		if v, ok := f.ComposeFile["encrypted_env"].(string); ok {
+			cf.EncryptedEnv = &v
+		}
+		if keys, ok := f.ComposeFile["allowed_envs"].([]string); ok && len(keys) > 0 {
+			cf.AllowedEnvs = keys
+		}
+		if v, ok := f.ComposeFile["public_logs"].(bool); ok {
+			cf.PublicLogs = &v
+		}
+		if v, ok := f.ComposeFile["public_sysinfo"].(bool); ok {
+			cf.PublicSysinfo = &v
+		}
+		if v, ok := f.ComposeFile["public_tcbinfo"].(bool); ok {
+			cf.PublicTcbinfo = &v
+		}
+		if v, ok := f.ComposeFile["secure_time"].(bool); ok {
+			cf.SecureTime = &v
+		}
+		if v, ok := f.ComposeFile["storage_fs"].(string); ok && v != "" {
+			cf.StorageFS = &v
+		}
+		req.ComposeFile = cf
+	}
+
 	if !f.Region.IsNull() && !f.Region.IsUnknown() {
-		req["region"] = f.Region.ValueString()
+		region := f.Region.ValueString()
+		req.Region = &region
 	}
 	if f.HasNodeID {
-		req["teepod_id"] = f.NodeID
+		teepodID := int(f.NodeID)
+		req.TeepodID = &teepodID
 	}
 	if !f.Image.IsNull() && !f.Image.IsUnknown() {
-		req["image"] = f.Image.ValueString()
+		img := f.Image.ValueString()
+		req.Image = &img
 	}
 	if f.HasCustomAppID {
-		req["app_id"] = f.CustomAppID
+		req.CustomAppID = &f.CustomAppID
 	}
 	if f.HasNonce {
-		req["nonce"] = f.Nonce
+		req.Nonce = &f.Nonce
 	}
 	if !f.DiskSize.IsNull() && !f.DiskSize.IsUnknown() {
-		req["disk_size"] = f.DiskSize.ValueInt64()
+		ds := int(f.DiskSize.ValueInt64())
+		req.DiskSize = &ds
 	}
 	if len(f.SSHAuthorizedKeys) > 0 {
-		userConfig, err := json.Marshal(map[string]any{
-			"ssh_authorized_keys": f.SSHAuthorizedKeys,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("build user_config JSON: %w", err)
-		}
-		req["user_config"] = string(userConfig)
+		req.SSHAuthorizedKeys = f.SSHAuthorizedKeys
 	}
 	return req, nil
 }
 
-// provisionResponse holds the common fields returned from /cvms/provision.
-type provisionResponse struct {
-	AppID               string `json:"app_id"`
-	ComposeHash         string `json:"compose_hash"`
-	AppEnvEncryptPubkey string `json:"app_env_encrypt_pubkey"`
+// commitCreateResult holds the fields needed from the commit response.
+type commitCreateResult struct {
+	AppID  string
+	VMUUID string
 }
 
 // commitAndCreate calls POST /cvms to finalize a provision request.
-// Returns the CVM API response from the commit.
+// Returns the essential fields from the commit response.
 func commitAndCreate(
 	ctx context.Context,
-	client *APIClient,
-	provResp provisionResponse,
+	client *phala.Client,
+	provResp *phala.ProvisionCVMResponse,
 	encryptedEnv string,
 	hasEncryptedEnv bool,
 	envKeys []string,
-) (*cvmAPIResponse, error) {
-	commitReq := map[string]any{
-		"app_id":       provResp.AppID,
-		"compose_hash": provResp.ComposeHash,
+) (*commitCreateResult, error) {
+	commitReq := &phala.CommitCVMProvisionRequest{
+		AppID:       provResp.AppID,
+		ComposeHash: provResp.ComposeHash,
 	}
 	if hasEncryptedEnv {
-		commitReq["encrypted_env"] = encryptedEnv
+		commitReq.EncryptedEnv = &encryptedEnv
 	}
 	if len(envKeys) > 0 {
-		commitReq["env_keys"] = envKeys
+		commitReq.EnvKeys = envKeys
 	}
 
-	var createResp cvmAPIResponse
-	if err := client.PostJSON(ctx, "/cvms", commitReq, &createResp); err != nil {
+	createResp, err := client.CommitCVMProvision(ctx, commitReq)
+	if err != nil {
 		return nil, err
 	}
-	return &createResp, nil
+	return &commitCreateResult{
+		AppID:  provResp.AppID,
+		VMUUID: createResp.CvmID(),
+	}, nil
 }
 
 // ---------------------------------------------------------------------------

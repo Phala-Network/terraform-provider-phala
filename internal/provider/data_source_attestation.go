@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -14,7 +15,7 @@ import (
 var _ datasource.DataSource = &attestationDataSource{}
 
 type attestationDataSource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type attestationDataSourceModel struct {
@@ -27,15 +28,6 @@ type attestationDataSourceModel struct {
 	TCBInfoJSON      types.String `tfsdk:"tcb_info_json"`
 	CertificatesJSON types.String `tfsdk:"app_certificates_json"`
 	RawJSON          types.String `tfsdk:"raw_json"`
-}
-
-type attestationAPIResponse struct {
-	IsOnline        bool            `json:"is_online"`
-	IsPublic        bool            `json:"is_public"`
-	Error           *string         `json:"error"`
-	AppCertificates json.RawMessage `json:"app_certificates"`
-	TCBInfo         json.RawMessage `json:"tcb_info"`
-	ComposeFile     *string         `json:"compose_file"`
 }
 
 func NewAttestationDataSource() datasource.DataSource {
@@ -91,11 +83,11 @@ func (d *attestationDataSource) Configure(_ context.Context, req datasource.Conf
 		return
 	}
 
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring attestation data source.",
+			"Expected *phala.Client while configuring attestation data source.",
 		)
 		return
 	}
@@ -129,31 +121,61 @@ func (d *attestationDataSource) Read(ctx context.Context, req datasource.ReadReq
 		return
 	}
 
-	var payload attestationAPIResponse
-	if err := d.client.GetJSON(ctx, cvmPath(cvmID)+"/attestation", &payload); err != nil {
+	attestation, err := d.client.GetCVMAttestation(ctx, cvmID)
+	if err != nil {
 		resp.Diagnostics.AddError("Failed to fetch attestation", err.Error())
+		return
+	}
+
+	// Marshal typed sub-fields to JSON strings for Terraform state.
+	tcbInfoJSON, err := marshalNullableToJSON(attestation.TCBInfo)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to encode tcb_info", err.Error())
+		return
+	}
+
+	certsJSON, err := marshalNullableToJSON(attestation.AppCertificates)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to encode app_certificates", err.Error())
+		return
+	}
+
+	rawJSON, err := json.Marshal(attestation)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to encode attestation response", err.Error())
 		return
 	}
 
 	state := attestationDataSourceModel{
 		ID:               types.StringValue(cvmID),
 		CVMID:            types.StringValue(cvmID),
-		IsOnline:         types.BoolValue(payload.IsOnline),
-		IsPublic:         types.BoolValue(payload.IsPublic),
-		Error:            nullableStringPtr(payload.Error),
-		ComposeFile:      nullableStringPtr(payload.ComposeFile),
-		TCBInfoJSON:      nullableJSON(payload.TCBInfo),
-		CertificatesJSON: nullableJSON(payload.AppCertificates),
+		IsOnline:         types.BoolValue(attestation.IsOnline),
+		IsPublic:         types.BoolValue(attestation.IsPublic),
+		Error:            nullableStringPtr(attestation.Error),
+		ComposeFile:      nullableStringPtr(attestation.ComposeFile),
+		TCBInfoJSON:      tcbInfoJSON,
+		CertificatesJSON: certsJSON,
+		RawJSON:          types.StringValue(string(rawJSON)),
 	}
-
-	rawJSON, err := json.Marshal(payload)
-	if err != nil {
-		resp.Diagnostics.AddError("Failed to encode attestation response", err.Error())
-		return
-	}
-	state.RawJSON = types.StringValue(string(rawJSON))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// marshalNullableToJSON marshals v to a JSON string. Returns types.StringNull()
+// if v is nil or marshals to JSON null/empty.
+func marshalNullableToJSON(v any) (types.String, error) {
+	if v == nil {
+		return types.StringNull(), nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return types.StringNull(), err
+	}
+	s := string(b)
+	if s == "null" || s == "" || s == "[]" {
+		return types.StringNull(), nil
+	}
+	return types.StringValue(s), nil
 }
 
 func nullableJSON(raw json.RawMessage) types.String {

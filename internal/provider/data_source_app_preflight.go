@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -15,7 +16,7 @@ import (
 var _ datasource.DataSource = &appPreflightDataSource{}
 
 type appPreflightDataSource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type appPreflightDataSourceModel struct {
@@ -53,20 +54,6 @@ type appPreflightDataSourceModel struct {
 	NodeIDOut           types.Int64  `tfsdk:"matched_node_id"`
 	KMSID               types.String `tfsdk:"kms_id"`
 	RawJSON             types.String `tfsdk:"raw_json"`
-}
-
-type appPreflightProvisionResponse struct {
-	AppID               string          `json:"app_id"`
-	AppEnvEncryptPubkey string          `json:"app_env_encrypt_pubkey"`
-	ComposeHash         string          `json:"compose_hash"`
-	KMSInfo             json.RawMessage `json:"kms_info"`
-	FMSPC               string          `json:"fmspc"`
-	DeviceID            string          `json:"device_id"`
-	OSImageHash         string          `json:"os_image_hash"`
-	InstanceType        string          `json:"instance_type"`
-	TeepodID            *int64          `json:"teepod_id"`
-	NodeID              *int64          `json:"node_id"`
-	KMSID               string          `json:"kms_id"`
 }
 
 func NewAppPreflightDataSource() datasource.DataSource {
@@ -221,11 +208,11 @@ func (d *appPreflightDataSource) Configure(_ context.Context, req datasource.Con
 		return
 	}
 
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring app preflight data source.",
+			"Expected *phala.Client while configuring app preflight data source.",
 		)
 		return
 	}
@@ -264,7 +251,7 @@ func (d *appPreflightDataSource) Read(ctx context.Context, req datasource.ReadRe
 
 func runAppPreflight(
 	ctx context.Context,
-	client *APIClient,
+	client *phala.Client,
 	config appPreflightDataSourceModel,
 ) (appPreflightDataSourceModel, diag.Diagnostics) {
 	var diags diag.Diagnostics
@@ -274,9 +261,10 @@ func runAppPreflight(
 		return config, diags
 	}
 
-	var provisionResp appPreflightProvisionResponse
-	if err := client.PostJSON(ctx, "/cvms/provision", provReq, &provisionResp); err != nil {
-		diags.AddError("Failed to provision app preflight", err.Error())
+	provisionResp, err := client.ProvisionCVM(ctx, provReq)
+	if err != nil {
+		summary, detail := diagnosticFromAPIError("Failed to provision app preflight", err)
+		diags.AddError(summary, detail)
 		return config, diags
 	}
 	if strings.TrimSpace(provisionResp.ComposeHash) == "" {
@@ -290,24 +278,38 @@ func runAppPreflight(
 		return config, diags
 	}
 
+	var kmsInfoRaw json.RawMessage
+	if provisionResp.KMSInfo != nil {
+		b, err := json.Marshal(provisionResp.KMSInfo)
+		if err != nil {
+			diags.AddError("Failed to encode kms_info", err.Error())
+			return config, diags
+		}
+		kmsInfoRaw = b
+	}
+
 	state := config
 	state.ID = types.StringValue(strings.TrimSpace(provisionResp.ComposeHash))
 	state.AppID = nullableString(provisionResp.AppID)
 	state.ComposeHash = types.StringValue(strings.TrimSpace(provisionResp.ComposeHash))
 	state.AppEnvEncryptPubkey = nullableString(provisionResp.AppEnvEncryptPubkey)
-	state.KMSInfoJSON = nullableJSON(provisionResp.KMSInfo)
+	state.KMSInfoJSON = nullableJSON(kmsInfoRaw)
 	state.FMSPC = nullableString(provisionResp.FMSPC)
 	state.DeviceID = nullableString(provisionResp.DeviceID)
 	state.OSImageHash = nullableString(provisionResp.OSImageHash)
 	state.InstanceType = nullableString(provisionResp.InstanceType)
-	state.NodeIDOut = nullableInt64Ptr(nonNilInt64(provisionResp.NodeID, provisionResp.TeepodID))
+	if provisionResp.NodeID != nil {
+		state.NodeIDOut = types.Int64Value(int64(*provisionResp.NodeID))
+	} else {
+		state.NodeIDOut = types.Int64Null()
+	}
 	state.KMSID = nullableString(provisionResp.KMSID)
 	state.RawJSON = types.StringValue(string(rawJSON))
 
 	return state, diags
 }
 
-func buildAppPreflightProvisionReq(ctx context.Context, config appPreflightDataSourceModel) (map[string]any, diag.Diagnostics) {
+func buildAppPreflightProvisionReq(ctx context.Context, config appPreflightDataSourceModel) (*phala.ProvisionCVMRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	identity, identityDiags := resolveProvisionIdentity(config.KMS, config.CustomAppID, config.Nonce)
@@ -379,20 +381,4 @@ func boolValueOrDefault(value types.Bool, fallback bool, fieldName string) (bool
 		return false, diags
 	}
 	return value.ValueBool(), diags
-}
-
-func nullableInt64Ptr(v *int64) types.Int64 {
-	if v == nil {
-		return types.Int64Null()
-	}
-	return types.Int64Value(*v)
-}
-
-func nonNilInt64(values ...*int64) *int64 {
-	for _, v := range values {
-		if v != nil {
-			return v
-		}
-	}
-	return nil
 }

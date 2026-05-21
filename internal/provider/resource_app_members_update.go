@@ -2,11 +2,12 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 )
 
@@ -41,16 +42,26 @@ func (r *appResource) provisionComposeRevision(
 	bootstrapID string,
 	composeReq map[string]any,
 ) (string, error) {
-	var provResp struct {
-		ComposeHash string `json:"compose_hash"`
+	// Convert the map[string]any compose request to the SDK's typed
+	// request. JSON round-trip keeps the field naming in sync with the
+	// untyped helpers in resource_shared.go without having to maintain
+	// a parallel struct here.
+	body, err := json.Marshal(composeReq)
+	if err != nil {
+		return "", fmt.Errorf("marshal compose provision request: %w", err)
 	}
-	if err := r.client.PostJSON(ctx, cvmPath(bootstrapID)+"/compose_file/provision", composeReq, &provResp); err != nil {
+	sdkReq := &phala.ProvisionComposeUpdateRequest{}
+	if err := json.Unmarshal(body, sdkReq); err != nil {
+		return "", fmt.Errorf("convert compose provision request: %w", err)
+	}
+	resp, err := r.client.ProvisionCVMComposeFileUpdate(ctx, bootstrapID, sdkReq)
+	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(provResp.ComposeHash) == "" {
+	if strings.TrimSpace(resp.ComposeHash) == "" {
 		return "", fmt.Errorf("compose_file/provision returned empty compose_hash")
 	}
-	return provResp.ComposeHash, nil
+	return resp.ComposeHash, nil
 }
 
 // findRevisionIDByComposeHash scans the app's revisions and returns the
@@ -63,24 +74,20 @@ func (r *appResource) findRevisionIDByComposeHash(
 	appID string,
 	composeHash string,
 ) (string, error) {
-	type revisionEntry struct {
-		RevisionID  string `json:"revision_id"`
-		ComposeHash string `json:"compose_hash"`
-	}
-	type revisionsResp struct {
-		Revisions  []revisionEntry `json:"revisions"`
-		TotalPages int             `json:"total_pages"`
-	}
 	target := strings.ToLower(strings.TrimSpace(composeHash))
 	if target == "" {
 		return "", fmt.Errorf("findRevisionIDByComposeHash: empty compose_hash")
 	}
 	const pageSize = 50
 	for page := 1; ; page++ {
-		var listResp revisionsResp
-		path := fmt.Sprintf("%s/revisions?page=%d&page_size=%d", appPath(appID), page, pageSize)
-		if err := r.client.GetJSON(ctx, path, &listResp); err != nil {
+		p := page
+		ps := pageSize
+		listResp, err := r.client.GetAppRevisions(ctx, appIDWithoutPrefix(appID), &phala.PaginationOptions{Page: &p, PageSize: &ps})
+		if err != nil {
 			return "", fmt.Errorf("list app revisions: %w", err)
+		}
+		if listResp == nil {
+			return "", fmt.Errorf("list app revisions: nil response")
 		}
 		for _, rev := range listResp.Revisions {
 			if strings.EqualFold(strings.TrimSpace(rev.ComposeHash), target) {
@@ -114,10 +121,9 @@ func (r *appResource) redeployRevisionAcrossCVMs(
 	if len(vmUUIDs) == 0 {
 		return fmt.Errorf("redeploy: no vm_uuids to target")
 	}
-	body := map[string]any{"vm_uuids": vmUUIDs}
-	path := fmt.Sprintf("%s/revisions/%s/redeploy", appPath(appID), url.PathEscape(revisionID))
-	if err := r.client.PostJSON(ctx, path, body, nil); err != nil {
-		if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == 465 {
+	req := &phala.RedeployAppRevisionRequest{VMUUIDs: vmUUIDs}
+	if err := r.client.RedeployAppRevision(ctx, appIDWithoutPrefix(appID), revisionID, req); err != nil {
+		if apiErr, ok := err.(*phala.APIError); ok && apiErr.StatusCode == 465 {
 			return fmt.Errorf("on-chain KMS compose-hash registration required (HTTP 465); this provider supports kms = phala only for now")
 		}
 		return err
@@ -140,11 +146,11 @@ func (r *appResource) waitForCVMReadyByID(
 			return err
 		}
 		if cvm != nil {
-			if strings.EqualFold(strings.TrimSpace(cvm.Status), "running") && !cvm.inProgress() {
+			if strings.EqualFold(strings.TrimSpace(cvm.Status), "running") && !cvmInfoInProgress(cvm) {
 				return nil
 			}
-			if stablePowerState(cvm.Status) == "stopped" && !cvm.inProgress() {
-				return fmt.Errorf("CVM %s entered terminal stopped state: %s", cvmID, describeReplicaState(*cvm))
+			if stablePowerState(cvm.Status) == "stopped" && !cvmInfoInProgress(cvm) {
+				return fmt.Errorf("CVM %s entered terminal stopped state: %s", cvmID, describeReplicaState(cvm))
 			}
 		}
 		if time.Now().After(deadline) {
@@ -176,12 +182,17 @@ func (r *appResource) waitForCVMsOnComposeHash(
 		}
 		if len(cvms) > 0 {
 			settled := true
-			for _, c := range cvms {
-				if strings.ToLower(strings.TrimSpace(c.ComposeHash)) != want {
+			for i := range cvms {
+				c := &cvms[i]
+				haveHash := ""
+				if c.ComposeHash != nil {
+					haveHash = strings.ToLower(strings.TrimSpace(*c.ComposeHash))
+				}
+				if haveHash != want {
 					settled = false
 					break
 				}
-				if !strings.EqualFold(strings.TrimSpace(c.Status), "running") || c.inProgress() {
+				if !strings.EqualFold(strings.TrimSpace(c.Status), "running") || cvmInfoInProgress(c) {
 					settled = false
 					break
 				}
@@ -219,15 +230,18 @@ func (r *appResource) waitForCVMsOnComposeHash(
 func (r *appResource) patchEnvAcrossCVMs(
 	ctx context.Context,
 	vmUUIDs []string,
-	envReq any,
+	envReq *phala.UpdateEnvsRequest,
 ) error {
+	if envReq == nil {
+		return fmt.Errorf("patchEnvAcrossCVMs: nil envReq")
+	}
 	for _, vmUUID := range vmUUIDs {
 		id := strings.TrimSpace(vmUUID)
 		if id == "" {
 			continue
 		}
-		if err := r.client.PatchJSON(ctx, cvmPath(id)+"/envs", envReq, nil); err != nil {
-			if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == 465 {
+		if _, err := r.client.UpdateCVMEnvs(ctx, id, envReq); err != nil {
+			if apiErr, ok := err.(*phala.APIError); ok && apiErr.StatusCode == 465 {
 				return fmt.Errorf(
 					"encrypted env update on CVM %s requires on-chain compose-hash registration (HTTP 465); this provider supports kms = phala only for now",
 					id,
@@ -247,13 +261,13 @@ func (r *appResource) patchOSImageAcrossCVMs(
 	vmUUIDs []string,
 	imageName string,
 ) error {
-	payload := map[string]any{"os_image_name": imageName}
+	req := &phala.UpdateOSImageRequest{OSImageName: imageName}
 	for _, vmUUID := range vmUUIDs {
 		id := strings.TrimSpace(vmUUID)
 		if id == "" {
 			continue
 		}
-		if err := r.client.PatchJSON(ctx, cvmPath(id)+"/os-image", payload, nil); err != nil {
+		if err := r.client.UpdateOSImage(ctx, id, req); err != nil {
 			return fmt.Errorf("patch os-image on CVM %s: %w", id, err)
 		}
 	}
@@ -266,14 +280,17 @@ func (r *appResource) patchOSImageAcrossCVMs(
 func (r *appResource) patchResourcesAcrossCVMs(
 	ctx context.Context,
 	vmUUIDs []string,
-	resourceReq map[string]any,
+	resourceReq *phala.UpdateResourcesRequest,
 ) error {
+	if resourceReq == nil {
+		return fmt.Errorf("patchResourcesAcrossCVMs: nil resourceReq")
+	}
 	for _, vmUUID := range vmUUIDs {
 		id := strings.TrimSpace(vmUUID)
 		if id == "" {
 			continue
 		}
-		if err := r.client.PatchJSON(ctx, cvmPath(id)+"/resources", resourceReq, nil); err != nil {
+		if err := r.client.UpdateCVMResources(ctx, id, resourceReq); err != nil {
 			return fmt.Errorf("patch resources on CVM %s: %w", id, err)
 		}
 	}
@@ -282,10 +299,10 @@ func (r *appResource) patchResourcesAcrossCVMs(
 
 // collectVMUUIDs extracts the vm_uuid of every CVM in the slice, skipping
 // empties. Order matches the input.
-func collectVMUUIDs(cvms []cvmAPIResponse) []string {
+func collectVMUUIDs(cvms []phala.CVMInfo) []string {
 	out := make([]string, 0, len(cvms))
-	for _, c := range cvms {
-		if v := strings.TrimSpace(c.VMUUID); v != "" {
+	for i := range cvms {
+		if v := cvmInfoVMUUID(&cvms[i]); v != "" {
 			out = append(out, v)
 		}
 	}
@@ -367,7 +384,7 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 		// (this creates the revision and updates the bootstrap CVM), then
 		// redeploy the same revision to every other slot.
 		if err := provisionAndApplyComposeFileUpdate(ctx, r.client, a.bootstrapID, composeReq); err != nil {
-			if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == 465 {
+			if apiErr, ok := err.(*phala.APIError); ok && apiErr.StatusCode == 465 {
 				diags.AddError(
 					"On-chain KMS not supported in members mode",
 					"PATCH /compose_file returned HTTP 465 (compose hash registration required); this provider supports kms = phala only for now.",
@@ -391,7 +408,10 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 			diags.AddError("Failed to read bootstrap CVM after compose apply", err.Error())
 			return diags
 		}
-		newComposeHash := strings.TrimSpace(bootstrap.ComposeHash)
+		newComposeHash := ""
+		if bootstrap.ComposeHash != nil {
+			newComposeHash = strings.TrimSpace(*bootstrap.ComposeHash)
+		}
 		if newComposeHash == "" {
 			diags.AddError(
 				"Bootstrap CVM is missing compose_hash after apply",
@@ -408,7 +428,7 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 		// Fan out the same revision to every other CVM. The bootstrap
 		// already has it from the PATCH above — skip it explicitly.
 		others := make([]string, 0, len(a.vmUUIDs))
-		bootstrapUUID := strings.TrimSpace(bootstrap.VMUUID)
+		bootstrapUUID := cvmInfoVMUUID(bootstrap)
 		for _, vmUUID := range a.vmUUIDs {
 			if strings.TrimSpace(vmUUID) == bootstrapUUID {
 				continue
@@ -428,11 +448,12 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 	}
 
 	if a.envChanged {
-		envReq, err := a.envCfg.buildEnvUpdateReq(a.plan.EnvKeys)
+		envPayload, err := a.envCfg.buildEnvUpdateReq(a.plan.EnvKeys)
 		if err != nil {
 			diags.AddError("Missing encrypted_env", err.Error())
 			return diags
 		}
+		envReq := buildUpdateEnvsRequest(envPayload)
 		if err := r.patchEnvAcrossCVMs(ctx, a.vmUUIDs, envReq); err != nil {
 			diags.AddError("Failed to update app encrypted env", err.Error())
 			return diags
@@ -451,14 +472,16 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 	}
 
 	if !a.plan.Size.Equal(a.state.Size) || a.diskSizeChanged {
-		resourceReq := map[string]any{"allow_restart": true}
+		resReq := &phala.UpdateResourcesRequest{AllowRestart: boolPtr(true)}
 		if !a.plan.Size.Equal(a.state.Size) {
-			resourceReq["instance_type"] = a.plan.Size.ValueString()
+			s := a.plan.Size.ValueString()
+			resReq.InstanceType = &s
 		}
 		if a.diskSizeChanged {
-			resourceReq["disk_size"] = a.plan.DiskSize.ValueInt64()
+			ds := int(a.plan.DiskSize.ValueInt64())
+			resReq.DiskSize = &ds
 		}
-		if err := r.patchResourcesAcrossCVMs(ctx, a.vmUUIDs, resourceReq); err != nil {
+		if err := r.patchResourcesAcrossCVMs(ctx, a.vmUUIDs, resReq); err != nil {
 			diags.AddError("Failed to update app resources", err.Error())
 			return diags
 		}
@@ -474,14 +497,16 @@ func (r *appResource) applySingleCVMUpdate(ctx context.Context, a applySingleCVM
 	var diags diag.Diagnostics
 
 	if !a.plan.Size.Equal(a.state.Size) || a.diskSizeChanged {
-		resourceReq := map[string]any{"allow_restart": true}
+		resReq := &phala.UpdateResourcesRequest{AllowRestart: boolPtr(true)}
 		if !a.plan.Size.Equal(a.state.Size) {
-			resourceReq["instance_type"] = a.plan.Size.ValueString()
+			s := a.plan.Size.ValueString()
+			resReq.InstanceType = &s
 		}
 		if a.diskSizeChanged {
-			resourceReq["disk_size"] = a.plan.DiskSize.ValueInt64()
+			ds := int(a.plan.DiskSize.ValueInt64())
+			resReq.DiskSize = &ds
 		}
-		if err := r.client.PatchJSON(ctx, cvmPath(a.bootstrapID)+"/resources", resourceReq, nil); err != nil {
+		if err := r.client.UpdateCVMResources(ctx, a.bootstrapID, resReq); err != nil {
 			diags.AddError("Failed to update app resources", err.Error())
 			return diags
 		}
@@ -512,14 +537,14 @@ func (r *appResource) applySingleCVMUpdate(ctx context.Context, a applySingleCVM
 			diags.AddError("Invalid image update", "image must be set to a target OS image name when updating.")
 			return diags
 		}
-		if err := r.client.PatchJSON(ctx, cvmPath(a.bootstrapID)+"/os-image", map[string]any{"os_image_name": a.plan.Image.ValueString()}, nil); err != nil {
+		if err := r.client.UpdateOSImage(ctx, a.bootstrapID, &phala.UpdateOSImageRequest{OSImageName: a.plan.Image.ValueString()}); err != nil {
 			diags.AddError("Failed to update app OS image", err.Error())
 			return diags
 		}
 	}
 
 	if !a.plan.DockerCompose.Equal(a.state.DockerCompose) {
-		if err := r.client.PatchText(ctx, cvmPath(a.bootstrapID)+"/docker-compose", a.plan.DockerCompose.ValueString(), map[string]string{"Content-Type": "text/yaml"}, nil); err != nil {
+		if _, err := r.client.UpdateDockerCompose(ctx, a.bootstrapID, a.plan.DockerCompose.ValueString(), nil); err != nil {
 			diags.AddError("Failed to update app docker compose", err.Error())
 			return diags
 		}
@@ -530,20 +555,21 @@ func (r *appResource) applySingleCVMUpdate(ctx context.Context, a applySingleCVM
 		if !a.plan.PreLaunchScript.IsNull() && !a.plan.PreLaunchScript.IsUnknown() {
 			script = a.plan.PreLaunchScript.ValueString()
 		}
-		if err := r.client.PatchText(ctx, cvmPath(a.bootstrapID)+"/pre-launch-script", script, map[string]string{"Content-Type": "text/plain"}, nil); err != nil {
+		if _, err := r.client.UpdatePreLaunchScript(ctx, a.bootstrapID, script, nil); err != nil {
 			diags.AddError("Failed to update app pre-launch script", err.Error())
 			return diags
 		}
 	}
 
 	if a.envChanged {
-		envReq, err := a.envCfg.buildEnvUpdateReq(a.plan.EnvKeys)
+		envPayload, err := a.envCfg.buildEnvUpdateReq(a.plan.EnvKeys)
 		if err != nil {
 			diags.AddError("Missing encrypted_env", err.Error())
 			return diags
 		}
-		if err := r.client.PatchJSON(ctx, cvmPath(a.bootstrapID)+"/envs", envReq, nil); err != nil {
-			if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == 465 {
+		envReq := buildUpdateEnvsRequest(envPayload)
+		if _, err := r.client.UpdateCVMEnvs(ctx, a.bootstrapID, envReq); err != nil {
+			if apiErr, ok := err.(*phala.APIError); ok && apiErr.StatusCode == 465 {
 				diags.AddError(
 					"Encrypted env update requires on-chain verification",
 					"API returned HTTP 465 (compose hash registration required). Register compose_hash on-chain and retry with env_compose_hash and env_transaction_hash.",

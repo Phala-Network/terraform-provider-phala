@@ -3,8 +3,10 @@ package provider
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -118,7 +120,17 @@ func (p *phalaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		}
 	}
 
-	client := NewAPIClient(apiPrefix, apiKey, apiVersion, time.Duration(timeoutSec)*time.Second)
+	client, err := phala.NewClient(
+		phala.WithBaseURL(apiPrefix),
+		phala.WithAPIKey(apiKey),
+		phala.WithAPIVersion(apiVersion),
+		phala.WithTimeout(time.Duration(timeoutSec)*time.Second),
+	)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to create API client", err.Error())
+		return
+	}
+
 	resp.DataSourceData = client
 	resp.ResourceData = client
 }
@@ -151,4 +163,13 @@ func stringFromTF(v types.String) string {
 		return ""
 	}
 	return v.ValueString()
+}
+
+func nonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }

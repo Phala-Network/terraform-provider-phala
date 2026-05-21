@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -30,7 +31,7 @@ var _ resource.ResourceWithImportState = &appInstanceResource{}
 var instanceNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]{4,62}$`)
 
 type appInstanceResource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type appInstanceResourceModel struct {
@@ -248,27 +249,15 @@ func (r *appInstanceResource) Configure(_ context.Context, req resource.Configur
 	if req.ProviderData == nil {
 		return
 	}
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring app instance resource.",
+			"Expected *phala.Client while configuring app instance resource.",
 		)
 		return
 	}
 	r.client = client
-}
-
-// createAppInstanceRequest mirrors the cloud `POST /apps/{app_id}/instances`
-// body. We do not depend on the Go SDK's CreateAppInstanceRequest because the
-// `Name` field is still in-flight in the SDK (phala-cloud#263 / phala-cloud-monorepo#1386).
-type createAppInstanceRequest struct {
-	Name              string  `json:"name"`
-	NodeID            *int64  `json:"node_id,omitempty"`
-	DockerComposeFile *string `json:"docker_compose_file,omitempty"`
-	PreLaunchScript   *string `json:"pre_launch_script,omitempty"`
-	EncryptedEnv      *string `json:"encrypted_env,omitempty"`
-	ComposeHash       *string `json:"compose_hash,omitempty"`
 }
 
 func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -346,14 +335,15 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	body := createAppInstanceRequest{Name: name}
+	body := &phala.CreateAppInstanceRequest{Name: &name}
 	if !plan.NodeID.IsNull() && !plan.NodeID.IsUnknown() {
 		v := plan.NodeID.ValueInt64()
 		if v <= 0 {
 			resp.Diagnostics.AddAttributeError(path.Root("node_id"), "Invalid node_id", "node_id must be greater than 0.")
 			return
 		}
-		body.NodeID = &v
+		nodeID := int(v)
+		body.NodeID = &nodeID
 	}
 	if !plan.DockerCompose.IsNull() && !plan.DockerCompose.IsUnknown() {
 		v := plan.DockerCompose.ValueString()
@@ -387,13 +377,12 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 		body.ComposeHash = &v
 	}
 
-	var created cvmAPIResponse
-	createPath := appPath(appID) + "/instances"
-	if err := r.client.PostJSON(ctx, createPath, body, &created); err != nil {
+	created, err := r.client.CreateAppInstance(ctx, appIDWithoutPrefix(appID), body)
+	if err != nil {
 		// On-chain KMS flows return HTTP 465 with a commit token; surface a clear error
 		// rather than a confusing JSON-decode message. The two-phase flow is not yet
 		// wired up here because the provider only supports kms = phala today.
-		if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == 465 {
+		if apiErr, ok := err.(*phala.APIError); ok && apiErr.IsComposePrecondition() {
 			resp.Diagnostics.AddError(
 				"On-chain KMS not yet supported for phala_app_instance",
 				"The cloud API returned HTTP 465 (on-chain commit token required). phala_app_instance "+
@@ -402,7 +391,8 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 			)
 			return
 		}
-		resp.Diagnostics.AddError("Failed to create app instance", err.Error())
+		summary, detail := diagnosticFromAPIError("Failed to create app instance", err)
+		resp.Diagnostics.AddError(summary, detail)
 		return
 	}
 
@@ -414,7 +404,7 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 		resp.Diagnostics.AddError("Failed to confirm new app instance", err.Error())
 		return
 	}
-	merged := mergeCVMResponse(created, resolved)
+	merged := mergeCVMResponse(*created, resolved)
 
 	if shouldWait(plan.WaitForReady) {
 		ready, err := r.waitForInstanceRunning(ctx, appID, name, deadline)
@@ -508,8 +498,9 @@ func (r *appInstanceResource) Delete(ctx context.Context, req resource.DeleteReq
 		return
 	}
 
-	if err := r.client.Delete(ctx, cvmPath(vmUUID)); err != nil && !isNotFound(err) {
-		resp.Diagnostics.AddError("Failed to delete app instance", err.Error())
+	if err := r.client.DeleteCVM(ctx, vmUUID); err != nil && !isNotFound(err) {
+		summary, detail := diagnosticFromAPIError("Failed to delete app instance", err)
+		resp.Diagnostics.AddError(summary, detail)
 		return
 	}
 
@@ -551,38 +542,34 @@ func (r *appInstanceResource) ImportState(ctx context.Context, req resource.Impo
 // this resource's name): in that case we adopt the existing CVM instead of
 // POSTing a new one. Returns (cvm, true) on match, (zero, false) on no
 // match, or an error.
-func (r *appInstanceResource) findExistingByName(ctx context.Context, appID, name string) (cvmAPIResponse, bool, error) {
+func (r *appInstanceResource) findExistingByName(ctx context.Context, appID, name string) (phala.CVMInfo, bool, error) {
 	cvms, err := r.fetchAppCVMs(ctx, appID)
 	if err != nil {
 		if isNotFound(err) {
-			return cvmAPIResponse{}, false, nil
+			return phala.CVMInfo{}, false, nil
 		}
-		return cvmAPIResponse{}, false, err
+		return phala.CVMInfo{}, false, err
 	}
 	if match := findInstanceByName(cvms, name); match != nil {
 		return *match, true, nil
 	}
-	return cvmAPIResponse{}, false, nil
+	return phala.CVMInfo{}, false, nil
 }
 
-func (r *appInstanceResource) fetchAppCVMs(ctx context.Context, appID string) ([]cvmAPIResponse, error) {
-	var rawItems []map[string]any
-	if err := r.client.GetJSON(ctx, appPath(appID)+"/cvms", &rawItems); err != nil {
+func (r *appInstanceResource) fetchAppCVMs(ctx context.Context, appID string) ([]phala.CVMInfo, error) {
+	rawItems, err := r.client.GetAppCVMs(ctx, appIDWithoutPrefix(appID))
+	if err != nil {
 		return nil, err
 	}
-	items := make([]cvmAPIResponse, 0, len(rawItems))
+	items := make([]phala.CVMInfo, 0, len(rawItems))
 	for _, raw := range rawItems {
 		items = append(items, normalizeCVMFromAny(raw))
 	}
 	return normalizeCVMInfos(items), nil
 }
 
-func (r *appInstanceResource) fetchCVM(ctx context.Context, id string) (*cvmAPIResponse, error) {
-	var out cvmAPIResponse
-	if err := r.client.GetJSON(ctx, cvmPath(id), &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
+func (r *appInstanceResource) fetchCVM(ctx context.Context, id string) (*phala.CVMInfo, error) {
+	return r.client.GetCVMInfo(ctx, id)
 }
 
 func (r *appInstanceResource) loadAppEnvEncryptionPubkey(ctx context.Context, appID string) (string, error) {
@@ -590,8 +577,8 @@ func (r *appInstanceResource) loadAppEnvEncryptionPubkey(ctx context.Context, ap
 	if err != nil {
 		return "", err
 	}
-	for _, cvm := range cvms {
-		if pubkey := cvm.envEncryptionPubkey(); pubkey != "" {
+	for i := range cvms {
+		if pubkey := cvmInfoEnvEncryptionPubkey(&cvms[i]); pubkey != "" {
 			return pubkey, nil
 		}
 	}
@@ -607,53 +594,53 @@ func (r *appInstanceResource) loadAppEnvEncryptionPubkey(ctx context.Context, ap
 			}
 			return "", err
 		}
-		if pubkey := detail.envEncryptionPubkey(); pubkey != "" {
+		if pubkey := cvmInfoEnvEncryptionPubkey(detail); pubkey != "" {
 			return pubkey, nil
 		}
 	}
 	return "", nil
 }
 
-func (r *appInstanceResource) waitForInstance(ctx context.Context, appID, name string, deadline time.Time) (cvmAPIResponse, error) {
+func (r *appInstanceResource) waitForInstance(ctx context.Context, appID, name string, deadline time.Time) (phala.CVMInfo, error) {
 	for {
 		cvms, err := r.fetchAppCVMs(ctx, appID)
 		if err != nil && !isRetryable(err) && !isNotFound(err) {
-			return cvmAPIResponse{}, err
+			return phala.CVMInfo{}, err
 		}
 		if match := findInstanceByName(cvms, name); match != nil {
 			return *match, nil
 		}
 		if time.Now().After(deadline) {
-			return cvmAPIResponse{}, fmt.Errorf("timed out waiting for app %q instance %q to appear in CVM list", appID, name)
+			return phala.CVMInfo{}, fmt.Errorf("timed out waiting for app %q instance %q to appear in CVM list", appID, name)
 		}
 		select {
 		case <-ctx.Done():
-			return cvmAPIResponse{}, ctx.Err()
+			return phala.CVMInfo{}, ctx.Err()
 		case <-time.After(pollInterval(2 * time.Second)):
 		}
 	}
 }
 
-func (r *appInstanceResource) waitForInstanceRunning(ctx context.Context, appID, name string, deadline time.Time) (cvmAPIResponse, error) {
+func (r *appInstanceResource) waitForInstanceRunning(ctx context.Context, appID, name string, deadline time.Time) (phala.CVMInfo, error) {
 	for {
 		cvms, err := r.fetchAppCVMs(ctx, appID)
 		if err != nil && !isRetryable(err) && !isNotFound(err) {
-			return cvmAPIResponse{}, err
+			return phala.CVMInfo{}, err
 		}
 		if match := findInstanceByName(cvms, name); match != nil {
-			if strings.EqualFold(strings.TrimSpace(match.Status), "running") && !match.inProgress() {
+			if strings.EqualFold(strings.TrimSpace(match.Status), "running") && !cvmInfoInProgress(match) {
 				return *match, nil
 			}
-			if stablePowerState(match.Status) == "stopped" && !match.inProgress() {
-				return cvmAPIResponse{}, fmt.Errorf("instance %q entered terminal stopped state: %s", name, describeReplicaState(*match))
+			if stablePowerState(match.Status) == "stopped" && !cvmInfoInProgress(match) {
+				return phala.CVMInfo{}, fmt.Errorf("instance %q entered terminal stopped state: %s", name, describeReplicaState(match))
 			}
 		}
 		if time.Now().After(deadline) {
-			return cvmAPIResponse{}, fmt.Errorf("timed out waiting for app %q instance %q to become running", appID, name)
+			return phala.CVMInfo{}, fmt.Errorf("timed out waiting for app %q instance %q to become running", appID, name)
 		}
 		select {
 		case <-ctx.Done():
-			return cvmAPIResponse{}, ctx.Err()
+			return phala.CVMInfo{}, ctx.Err()
 		case <-time.After(pollInterval(3 * time.Second)):
 		}
 	}
@@ -684,7 +671,7 @@ func (r *appInstanceResource) waitForInstanceDeletion(ctx context.Context, appID
 	}
 }
 
-func findInstanceByName(cvms []cvmAPIResponse, name string) *cvmAPIResponse {
+func findInstanceByName(cvms []phala.CVMInfo, name string) *phala.CVMInfo {
 	target := strings.TrimSpace(name)
 	if target == "" {
 		return nil
@@ -700,7 +687,7 @@ func findInstanceByName(cvms []cvmAPIResponse, name string) *cvmAPIResponse {
 // mergeCVMResponse fills empty fields in `base` from `extra` so we can combine
 // the eager response from POST /apps/{id}/instances with the steady-state
 // row returned later by GET /apps/{id}/cvms.
-func mergeCVMResponse(base, extra cvmAPIResponse) cvmAPIResponse {
+func mergeCVMResponse(base, extra phala.CVMInfo) phala.CVMInfo {
 	if base.Name == "" {
 		base.Name = extra.Name
 	}
@@ -709,51 +696,60 @@ func mergeCVMResponse(base, extra cvmAPIResponse) cvmAPIResponse {
 	}
 	base.InProgress = extra.InProgress
 	base.Progress = extra.Progress
-	if base.AppID == "" {
+	if cvmInfoAppID(&base) == "" && cvmInfoAppID(&extra) != "" {
 		base.AppID = extra.AppID
 	}
-	if base.VMUUID == "" {
+	if cvmInfoVMUUID(&base) == "" && cvmInfoVMUUID(&extra) != "" {
 		base.VMUUID = extra.VMUUID
 	}
-	if base.InstanceID == "" {
+	if cvmInfoInstanceID(&base) == "" && cvmInfoInstanceID(&extra) != "" {
 		base.InstanceID = extra.InstanceID
 	}
-	if base.CreatedAt == "" {
+	if base.CreatedAt == nil && extra.CreatedAt != nil {
 		base.CreatedAt = extra.CreatedAt
 	}
-	if base.instanceType() == "" && extra.instanceType() != "" {
+	if cvmInfoInstanceType(&base) == "" && cvmInfoInstanceType(&extra) != "" {
 		// Preserve the richer Resource block from extra.
 		base.Resource = extra.Resource
-		base.InstanceType = extra.InstanceType
 	}
-	if base.region() == "" && extra.region() != "" {
+	if cvmInfoRegion(&base) == "" && cvmInfoRegion(&extra) != "" {
 		base.NodeInfo = extra.NodeInfo
-		base.Node = extra.Node
 	}
-	if base.endpoint() == "" && extra.endpoint() != "" {
+	if cvmInfoEndpoint(&base) == "" && cvmInfoEndpoint(&extra) != "" {
 		base.Endpoints = extra.Endpoints
 		base.PublicURLs = extra.PublicURLs
 	}
-	if len(base.ID) == 0 {
+	// Gateway info is typically missing on the create-time POST response
+	// and only appears after the cloud's steady-state read. Take it from
+	// `extra` whenever `base` doesn't already carry it so populateState
+	// can publish gateway_base_domain / gateway_cname on first apply.
+	if cvmInfoGatewayBaseDomain(&base) == "" && cvmInfoGatewayBaseDomain(&extra) != "" {
+		base.Gateway = extra.Gateway
+	}
+	if base.IDString() == "" {
 		base.ID = extra.ID
 	}
 	return base
 }
 
-func populateAppInstanceState(state *appInstanceResourceModel, appID, name string, cvm cvmAPIResponse) {
+func populateAppInstanceState(state *appInstanceResourceModel, appID, name string, cvm phala.CVMInfo) {
 	state.ID = types.StringValue(appID + ":" + name)
 	state.AppID = types.StringValue(appID)
 	state.Name = types.StringValue(name)
 
-	state.VMUUID = nullableString(cvm.VMUUID)
-	state.InstanceID = nullableString(cvm.InstanceID)
+	state.VMUUID = nullableString(cvmInfoVMUUID(&cvm))
+	state.InstanceID = nullableString(cvmInfoInstanceID(&cvm))
 	state.Status = nullableString(cvm.Status)
-	state.Region = nullableString(cvm.region())
-	state.InstanceType = nullableString(cvm.instanceType())
-	state.Endpoint = nullableString(cvm.endpoint())
-	state.GatewayBaseDomain = nullableString(cvm.gatewayBaseDomain())
-	state.GatewayCname = nullableString(cvm.gatewayCname())
-	state.CreatedAt = nullableString(cvm.CreatedAt)
+	state.Region = nullableString(cvmInfoRegion(&cvm))
+	state.InstanceType = nullableString(cvmInfoInstanceType(&cvm))
+	state.Endpoint = nullableString(cvmInfoEndpoint(&cvm))
+	state.GatewayBaseDomain = nullableString(cvmInfoGatewayBaseDomain(&cvm))
+	state.GatewayCname = nullableString(cvmInfoGatewayCname(&cvm))
+	createdAt := ""
+	if cvm.CreatedAt != nil {
+		createdAt = *cvm.CreatedAt
+	}
+	state.CreatedAt = nullableString(createdAt)
 }
 
 func validateInstanceName(name string) error {
