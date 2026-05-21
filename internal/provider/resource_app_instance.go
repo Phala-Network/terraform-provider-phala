@@ -719,7 +719,14 @@ func mergeCVMResponse(base, extra phala.CVMInfo) phala.CVMInfo {
 		base.Endpoints = extra.Endpoints
 		base.PublicURLs = extra.PublicURLs
 	}
-	if strings.TrimSpace(base.ID) == "" {
+	// Gateway info is typically missing on the create-time POST response
+	// and only appears after the cloud's steady-state read. Take it from
+	// `extra` whenever `base` doesn't already carry it so populateState
+	// can publish gateway_base_domain / gateway_cname on first apply.
+	if cvmInfoGatewayBaseDomain(&base) == "" && cvmInfoGatewayBaseDomain(&extra) != "" {
+		base.Gateway = extra.Gateway
+	}
+	if base.IDString() == "" {
 		base.ID = extra.ID
 	}
 	return base

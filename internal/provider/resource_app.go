@@ -1225,7 +1225,7 @@ func normalizeCVMInfos(cvms []phala.CVMInfo) []phala.CVMInfo {
 			vmUUID == "" &&
 			strings.TrimSpace(cvm.Name) == "" &&
 			strings.TrimSpace(cvm.Status) == "" &&
-			strings.TrimSpace(cvm.ID) == "" {
+			cvm.IDString() == "" {
 			continue
 		}
 		out = append(out, cvm)
@@ -1306,7 +1306,7 @@ func normalizeCVMFromAny(raw map[string]any) phala.CVMInfo {
 	if out.SecureTime == nil {
 		out.SecureTime = hosted.SecureTime
 	}
-	if strings.TrimSpace(out.ID) == "" {
+	if out.IDString() == "" {
 		out.ID = hosted.ID
 	}
 	if appURL := stringFromAny(hostedRaw["app_url"]); appURL != "" && len(out.Endpoints) == 0 {
