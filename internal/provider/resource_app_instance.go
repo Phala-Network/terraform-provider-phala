@@ -135,8 +135,12 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"compose_hash": schema.StringAttribute{
 				Optional: true,
-				MarkdownDescription: "Optional explicit compose hash. When omitted the backend resolves it " +
-					"from `docker_compose` (if provided) or the app's current revision. Changing forces replacement.",
+				MarkdownDescription: "Content-addressed pointer to an existing compose revision of the parent " +
+					"app: deploy the slot from a compose the app already has, without re-uploading the YAML. " +
+					"Mutually exclusive with `docker_compose` (the backend rejects both), and must reference a " +
+					"revision that belongs to this app. When omitted, the backend uses `docker_compose` (if set) " +
+					"or the app's current revision. Selecting a different revision is a new provisioning input, so " +
+					"changing it forces replacement.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
