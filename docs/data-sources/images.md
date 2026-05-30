@@ -45,3 +45,6 @@ Read-Only:
 - `regions` (List of String)
 - `slug` (String)
 - `version` (String)
+
+
+

@@ -34,3 +34,5 @@ output "workspace_tier" {
 - `role` (String)
 - `slug` (String)
 - `tier` (String)
+
+
