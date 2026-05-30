@@ -1,7 +1,7 @@
 # `PATCH /cvms/{cvm_id}/name` — Public-API rename endpoint
 
 Verified 2026-05-18 against `https://cloud-api.phala.com/api/v1` with a
-normal user `phak_*` API key (workspace `h4xusers-projects`). Captured here
+normal user `phak_*` API key (a test workspace). Captured here
 because the OpenAPI spec under-documents the behavior and provider code
 needs to react to it correctly.
 
@@ -49,18 +49,18 @@ the `detail` substring.
    handling should match on status code (`400`) **and** detail substring
    (`already in use`), not on the schema-typed error.
 
-3. **Phala-h4xuser CLI**. There is no `cvms rename` subcommand. Use
-   `phala-h4xuser api -X PATCH /cvms/<cvm_id>/name -F name=<new>` or raw
+3. **Phala CLI**. There is no `cvms rename` subcommand. Use
+   `phala api -X PATCH /cvms/<cvm_id>/name -F name=<new>` or raw
    curl.
 
 ## Test recipe (smoke)
 
 ```bash
-phala-h4xuser api -X PATCH "/cvms/$CVM_ID/name" -F name="$NEW_NAME"
+phala api -X PATCH "/cvms/$CVM_ID/name" -F name="$NEW_NAME"
 # Expect: empty body, status 204 (CLI may surface this as "no output").
 
 # Conflict probe:
-phala-h4xuser api -X PATCH "/cvms/$CVM_ID/name" -F name="$EXISTING_NAME_IN_WORKSPACE"
+phala api -X PATCH "/cvms/$CVM_ID/name" -F name="$EXISTING_NAME_IN_WORKSPACE"
 # Expect: HTTP 400 with body containing "already in use in this workspace".
 ```
 
