@@ -15,7 +15,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -123,11 +122,10 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Sensitive:   true,
 				ElementType: types.StringType,
 				MarkdownDescription: "Plaintext env vars for this instance. Values are encrypted before API submission, " +
-					"but plaintext is stored in Terraform state. Changing forces replacement. The parent app compose " +
-					"must already allow these env keys.",
-				PlanModifiers: []planmodifier.Map{
-					mapplanmodifier.RequiresReplace(),
-				},
+					"but plaintext is stored in Terraform state. Updated in place on the slot's CVM " +
+					"(via `PATCH /cvms/{uuid}/envs`) — the `vm_uuid` is preserved, mirroring `phala_app.env`. " +
+					"The parent app compose must already allow these env keys. Only settable on instances created " +
+					"by this resource (`managed = true`); adopted bootstrap slots reject per-instance env.",
 			},
 			"encrypted_env": schema.StringAttribute{
 				Optional:            true,
@@ -454,14 +452,135 @@ func (r *appInstanceResource) Read(ctx context.Context, req resource.ReadRequest
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
-func (r *appInstanceResource) Update(_ context.Context, _ resource.UpdateRequest, resp *resource.UpdateResponse) {
-	// All meaningful inputs are RequiresReplace. The only updatable fields are
-	// wait_for_ready / wait_timeout_seconds, which control provider-side polling
-	// only — accept the new plan into state without making any API calls.
-	resp.Diagnostics.AddError(
-		"phala_app_instance has no in-place update path",
-		"All input fields are RequiresReplace. If this Update was reached, the framework will recreate the resource instead.",
+func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan, state appInstanceResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// env is the only in-place-updatable input. Every other field is
+	// RequiresReplace, so the framework only routes here when env (or the
+	// provider-side wait_* knobs) changed. Start from prior state to preserve
+	// every computed attribute (vm_uuid, id, gateway_*, created_at, ...) and
+	// the managed flag; the env PATCH never replaces the CVM.
+	plan.VMUUID = state.VMUUID
+	plan.InstanceID = state.InstanceID
+	plan.Status = state.Status
+	plan.Region = state.Region
+	plan.InstanceType = state.InstanceType
+	plan.Endpoint = state.Endpoint
+	plan.GatewayBaseDomain = state.GatewayBaseDomain
+	plan.GatewayCname = state.GatewayCname
+	plan.CreatedAt = state.CreatedAt
+	plan.ComposeHash = state.ComposeHash
+	plan.Managed = state.Managed
+
+	envChanged := !plan.Env.Equal(state.Env)
+	if !envChanged {
+		// Only wait_for_ready / wait_timeout_seconds changed — provider-side
+		// polling knobs with no cloud effect. Accept into state, no API call.
+		resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+		return
+	}
+
+	// env on an adopted (managed=false) slot is rejected at Create for the same
+	// reason it can't be mutated here: the CVM is owned by phala_app, whose own
+	// env path should be used. Keep the guard symmetric.
+	if !state.Managed.ValueBool() {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("env"),
+			"Cannot update env on an adopted instance",
+			"This phala_app_instance adopted a CVM owned by phala_app (managed = false). "+
+				"Set env on the parent phala_app for the bootstrap slot; per-instance env updates "+
+				"are only supported for CVMs created by phala_app_instance.",
+		)
+		return
+	}
+
+	appID := ensureAppPrefix(strings.TrimSpace(plan.AppID.ValueString()))
+	cvmID := strings.TrimSpace(state.VMUUID.ValueString())
+	if cvmID == "" {
+		resp.Diagnostics.AddError("Missing CVM identity", "State has no vm_uuid for this instance; cannot target the env update.")
+		return
+	}
+
+	envCfg, envDiags := parseEnvConfig(
+		ctx,
+		plan.Env,
+		plan.EncryptedEnv,
+		types.ListNull(types.StringType),
+		types.StringNull(),
+		types.StringNull(),
+		false,
 	)
+	resp.Diagnostics.Append(envDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if envCfg.HasAutoEnv {
+		pubkey, err := r.loadAppEnvEncryptionPubkey(ctx, appID)
+		if err != nil {
+			resp.Diagnostics.AddError("Failed to load app encryption key", err.Error())
+			return
+		}
+		if pubkey == "" {
+			resp.Diagnostics.AddError("Missing encryption public key", "No CVM under the app returned encrypted_env_pubkey; cannot encrypt the updated env.")
+			return
+		}
+		if err := envCfg.encryptAutoEnv(pubkey); err != nil {
+			resp.Diagnostics.AddError("Failed to encrypt env", err.Error())
+			return
+		}
+	}
+
+	payload, err := envCfg.buildEnvUpdateReq(types.ListNull(types.StringType))
+	if err != nil {
+		resp.Diagnostics.AddError("Missing encrypted_env", err.Error())
+		return
+	}
+	if _, err := r.client.UpdateCVMEnvs(ctx, cvmID, buildUpdateEnvsRequest(payload)); err != nil {
+		if apiErr, ok := err.(*phala.APIError); ok && apiErr.IsComposePrecondition() {
+			resp.Diagnostics.AddError(
+				"On-chain KMS not yet supported for phala_app_instance",
+				"The cloud API returned HTTP 465 (on-chain compose-hash registration required). "+
+					"phala_app_instance currently supports only the single-call PHALA KMS flow.",
+			)
+			return
+		}
+		summary, detail := diagnosticFromAPIError("Failed to update app instance env", err)
+		resp.Diagnostics.AddError(summary, detail)
+		return
+	}
+
+	// Refresh computed fields (status, etc.) from the now-updated CVM. The env
+	// PATCH does not change vm_uuid/name, so identity is preserved. Re-read is
+	// best-effort: on failure we keep the carried-over state values.
+	name := strings.TrimSpace(plan.Name.ValueString())
+	if shouldWait(plan.WaitForReady) {
+		deadline := time.Now().Add(waitTimeout(plan.WaitTimeoutSecond))
+		if _, err := r.waitForInstanceRunning(ctx, appID, name, deadline); err != nil {
+			resp.Diagnostics.AddError("Instance did not return to ready after env update", err.Error())
+			return
+		}
+	}
+	if cvm, err := r.fetchCVM(ctx, cvmID); err == nil && cvm != nil {
+		refreshed := plan
+		populateAppInstanceState(&refreshed, appID, name, *cvm)
+		refreshed.Env = plan.Env
+		refreshed.EncryptedEnv = plan.EncryptedEnv
+		refreshed.Managed = state.Managed
+		refreshed.WaitForReady = plan.WaitForReady
+		refreshed.WaitTimeoutSecond = plan.WaitTimeoutSecond
+		refreshed.NodeID = plan.NodeID
+		refreshed.DockerCompose = plan.DockerCompose
+		refreshed.PreLaunchScript = plan.PreLaunchScript
+		plan = refreshed
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
 func (r *appInstanceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
