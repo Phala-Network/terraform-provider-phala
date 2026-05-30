@@ -164,3 +164,89 @@ func TestAppInstanceEnvUpdatePlansInPlace(t *testing.T) {
 		t.Fatalf("env change must plan as in-place update, but RequiresReplace = %v", paths)
 	}
 }
+
+// TestAppInstanceForceNewMatrix asserts, behaviorally via PlanResourceChange,
+// exactly which phala_app_instance attributes force replacement. This is the
+// ground-truth check behind the schema's RequiresReplace modifiers — and a
+// guard against an env-style modifier being added or dropped by accident.
+func TestAppInstanceForceNewMatrix(t *testing.T) {
+	ctx := context.Background()
+	server := providerserver.NewProtocol6(New("test")())()
+
+	provType := tftypes.Object{AttributeTypes: map[string]tftypes.Type{
+		"api_key": tftypes.String, "api_prefix": tftypes.String,
+		"api_version": tftypes.String, "timeout_seconds": tftypes.Number,
+	}}
+	provVal := tftypes.NewValue(provType, map[string]tftypes.Value{
+		"api_key":         tftypes.NewValue(tftypes.String, "phat_test_key"),
+		"api_prefix":      tftypes.NewValue(tftypes.String, "https://example.invalid/api/v1"),
+		"api_version":     tftypes.NewValue(tftypes.String, nil),
+		"timeout_seconds": tftypes.NewValue(tftypes.Number, 5),
+	})
+	provDV, _ := tfprotov6.NewDynamicValue(provType, provVal)
+	if _, err := server.ConfigureProvider(ctx, &tfprotov6.ConfigureProviderRequest{Config: &provDV}); err != nil {
+		t.Fatalf("ConfigureProvider: %v", err)
+	}
+	ot := instanceObjectType()
+
+	// Each case starts from the same managed prior state, changes exactly one
+	// attribute, and asserts whether that attribute lands in RequiresReplace.
+	cases := []struct {
+		attr     string
+		newVal   tftypes.Value
+		forceNew bool
+	}{
+		{"node_id", tftypes.NewValue(tftypes.Number, 18), true},
+		{"docker_compose", tftypes.NewValue(tftypes.String, "services:\n  x:\n"), true},
+		{"pre_launch_script", tftypes.NewValue(tftypes.String, "#!/bin/sh\necho hi\n"), true},
+		{"compose_hash", tftypes.NewValue(tftypes.String, "abc123"), true},
+		{"env", tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, map[string]tftypes.Value{
+			"SLOT_SECRET": tftypes.NewValue(tftypes.String, "v2"),
+		}), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.attr, func(t *testing.T) {
+			var prior map[string]tftypes.Value
+			_ = instanceStateValue("v1").As(&prior)
+			var cfg map[string]tftypes.Value
+			_ = instanceConfigValue("v1").As(&cfg)
+
+			prior[tc.attr] = tc.newVal // proposed new state = prior with attr changed
+			cfg[tc.attr] = tc.newVal   // config carries the same user-set change
+
+			priorOrig := instanceStateValue("v1")
+			priorOrigDV, _ := tfprotov6.NewDynamicValue(ot, priorOrig)
+			proposedDV, _ := tfprotov6.NewDynamicValue(ot, tftypes.NewValue(ot, prior))
+			cfgDV, _ := tfprotov6.NewDynamicValue(ot, tftypes.NewValue(ot, cfg))
+
+			plan, err := server.PlanResourceChange(ctx, &tfprotov6.PlanResourceChangeRequest{
+				TypeName:         "phala_app_instance",
+				PriorState:       &priorOrigDV,
+				ProposedNewState: &proposedDV,
+				Config:           &cfgDV,
+			})
+			if err != nil {
+				t.Fatalf("PlanResourceChange: %v", err)
+			}
+			for _, d := range plan.Diagnostics {
+				if d.Severity == tfprotov6.DiagnosticSeverityError {
+					t.Fatalf("plan error: %s — %s", d.Summary, d.Detail)
+				}
+			}
+			hit := false
+			for _, p := range plan.RequiresReplace {
+				if p.String() == "AttributeName(\""+tc.attr+"\")" {
+					hit = true
+				}
+			}
+			if hit != tc.forceNew {
+				var got []string
+				for _, p := range plan.RequiresReplace {
+					got = append(got, p.String())
+				}
+				t.Fatalf("%s: forceNew=%v want %v (RequiresReplace=%v)", tc.attr, hit, tc.forceNew, got)
+			}
+		})
+	}
+}
