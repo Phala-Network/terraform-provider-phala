@@ -126,12 +126,12 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 					"by this resource (`managed = true`); adopted bootstrap slots reject per-instance env.",
 			},
 			"encrypted_env": schema.StringAttribute{
-				Optional:            true,
-				Sensitive:           true,
-				MarkdownDescription: "Optional hex-encoded encrypted env payload to seed at create time.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
+				Optional:  true,
+				Sensitive: true,
+				MarkdownDescription: "Optional hex-encoded pre-encrypted env payload — the manual " +
+					"alternative to `env` (mutually exclusive with it). Updated in place on the slot's " +
+					"CVM via the same `PATCH /cvms/{uuid}/envs` as `env`, preserving `vm_uuid`. Only " +
+					"mutable on managed instances; adopted slots reject per-instance overrides.",
 			},
 			"compose_hash": schema.StringAttribute{
 				Optional: true,
@@ -476,12 +476,14 @@ func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateReq
 	plan.ComposeHash = state.ComposeHash
 	plan.Managed = state.Managed
 
-	// Only auto-mode `env` updates in place. `encrypted_env` (manual mode) and
-	// `compose_hash` remain RequiresReplace, so a change to either is handled by
-	// the framework as a replacement before Update is ever reached — don't test
-	// them here (it would be unreachable). `encrypted_env` would also need an
-	// `env_keys` input, which this resource doesn't expose.
-	envChanged := !plan.Env.Equal(state.Env)
+	// `env` (auto) and `encrypted_env` (manual, mutually exclusive with env)
+	// both land at PATCH /cvms/{uuid}/envs and update in place. The backend's
+	// envs endpoint only requires `encrypted_env`; `env_keys` is optional and,
+	// when unchanged, takes the direct-update path — so a bare encrypted_env
+	// swap updates in place without replacement. `compose_hash` stays
+	// RequiresReplace (it's a content-addressed pointer to a compose/revision,
+	// not freely settable alongside docker_compose).
+	envChanged := !plan.Env.Equal(state.Env) || !plan.EncryptedEnv.Equal(state.EncryptedEnv)
 	composeChanged := !plan.DockerCompose.Equal(state.DockerCompose)
 	preLaunchChanged := !plan.PreLaunchScript.Equal(state.PreLaunchScript)
 

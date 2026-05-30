@@ -250,3 +250,68 @@ func TestAppInstanceForceNewMatrix(t *testing.T) {
 		})
 	}
 }
+
+// TestAppInstanceEncryptedEnvUpdatePlansInPlace locks the manual-mode
+// counterpart: changing encrypted_env (env unset) must plan in place, not
+// force replacement — it lands at the same PATCH /cvms/{uuid}/envs as env.
+func TestAppInstanceEncryptedEnvUpdatePlansInPlace(t *testing.T) {
+	ctx := context.Background()
+	server := providerserver.NewProtocol6(New("test")())()
+	provType := tftypes.Object{AttributeTypes: map[string]tftypes.Type{
+		"api_key": tftypes.String, "api_prefix": tftypes.String,
+		"api_version": tftypes.String, "timeout_seconds": tftypes.Number,
+	}}
+	provVal := tftypes.NewValue(provType, map[string]tftypes.Value{
+		"api_key":         tftypes.NewValue(tftypes.String, "phat_test_key"),
+		"api_prefix":      tftypes.NewValue(tftypes.String, "https://example.invalid/api/v1"),
+		"api_version":     tftypes.NewValue(tftypes.String, nil),
+		"timeout_seconds": tftypes.NewValue(tftypes.Number, 5),
+	})
+	provDV, _ := tfprotov6.NewDynamicValue(provType, provVal)
+	if _, err := server.ConfigureProvider(ctx, &tfprotov6.ConfigureProviderRequest{Config: &provDV}); err != nil {
+		t.Fatalf("ConfigureProvider: %v", err)
+	}
+	ot := instanceObjectType()
+
+	// Manual-mode prior: env null, encrypted_env set.
+	var prior map[string]tftypes.Value
+	_ = instanceStateValue("v1").As(&prior)
+	prior["env"] = tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, nil)
+	prior["encrypted_env"] = tftypes.NewValue(tftypes.String, "deadbeef01")
+	priorDV, _ := tfprotov6.NewDynamicValue(ot, tftypes.NewValue(ot, prior))
+
+	var cfg map[string]tftypes.Value
+	_ = instanceConfigValue("v1").As(&cfg)
+	cfg["env"] = tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, nil)
+	cfg["encrypted_env"] = tftypes.NewValue(tftypes.String, "cafef00d02")
+
+	proposed := make(map[string]tftypes.Value, len(prior))
+	for k, v := range prior {
+		proposed[k] = v
+	}
+	proposed["encrypted_env"] = tftypes.NewValue(tftypes.String, "cafef00d02")
+	proposedDV, _ := tfprotov6.NewDynamicValue(ot, tftypes.NewValue(ot, proposed))
+	cfgDV, _ := tfprotov6.NewDynamicValue(ot, tftypes.NewValue(ot, cfg))
+
+	plan, err := server.PlanResourceChange(ctx, &tfprotov6.PlanResourceChangeRequest{
+		TypeName:         "phala_app_instance",
+		PriorState:       &priorDV,
+		ProposedNewState: &proposedDV,
+		Config:           &cfgDV,
+	})
+	if err != nil {
+		t.Fatalf("PlanResourceChange: %v", err)
+	}
+	for _, d := range plan.Diagnostics {
+		if d.Severity == tfprotov6.DiagnosticSeverityError {
+			t.Fatalf("plan error: %s — %s", d.Summary, d.Detail)
+		}
+	}
+	if len(plan.RequiresReplace) != 0 {
+		var got []string
+		for _, p := range plan.RequiresReplace {
+			got = append(got, p.String())
+		}
+		t.Fatalf("encrypted_env change must plan in-place, RequiresReplace=%v", got)
+	}
+}
