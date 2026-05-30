@@ -476,7 +476,12 @@ func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateReq
 	plan.ComposeHash = state.ComposeHash
 	plan.Managed = state.Managed
 
-	envChanged := !plan.Env.Equal(state.Env) || !plan.EncryptedEnv.Equal(state.EncryptedEnv)
+	// Only auto-mode `env` updates in place. `encrypted_env` (manual mode) and
+	// `compose_hash` remain RequiresReplace, so a change to either is handled by
+	// the framework as a replacement before Update is ever reached — don't test
+	// them here (it would be unreachable). `encrypted_env` would also need an
+	// `env_keys` input, which this resource doesn't expose.
+	envChanged := !plan.Env.Equal(state.Env)
 	composeChanged := !plan.DockerCompose.Equal(state.DockerCompose)
 	preLaunchChanged := !plan.PreLaunchScript.Equal(state.PreLaunchScript)
 
