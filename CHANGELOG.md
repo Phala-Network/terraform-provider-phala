@@ -12,6 +12,7 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ### Removed
 
+- **`ssh_authorized_keys`** from `phala_app`, the `phala_app_preflight` resource, and the `phala_app_preflight` data source (**breaking**). The field was inert: the cloud's provision request schema has no such field, so the value was silently dropped and never reached the CVM. SSH keys are account-scoped — the keys you register with the `phala_ssh_key` resource are the ones injected into CVMs at launch. Remove `ssh_authorized_keys` from your `phala_app` blocks and manage SSH access via `phala_ssh_key`.
 - `internal/phalaapi/` (oapi-codegen output)
 - `openapi/` (vendored spec + generator)
 - Custom `APIClient`, `cvmAPIResponse`, `appAPIResponse` types — replaced by SDK equivalents.

@@ -15,7 +15,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -138,15 +137,6 @@ func sharedCVMSchemaAttrs() map[string]schema.Attribute {
 		"pre_launch_script": schema.StringAttribute{
 			Optional:            true,
 			MarkdownDescription: "Optional pre-launch script content.",
-		},
-		"ssh_authorized_keys": schema.ListAttribute{
-			Optional:    true,
-			ElementType: types.StringType,
-			MarkdownDescription: "Per-deployment SSH public keys injected at launch via user_config. " +
-				"Force-new because runtime mutation is not exposed in current public API.",
-			PlanModifiers: []planmodifier.List{
-				listplanmodifier.RequiresReplace(),
-			},
 		},
 		"env": schema.MapAttribute{
 			Optional:    true,
@@ -277,21 +267,20 @@ func buildComposeFileUpdateRequest(f composeFileFields, updateEnvVars bool) map[
 
 // provisionFields holds the inputs needed to build a /cvms/provision request.
 type provisionFields struct {
-	Name              string
-	Size              string
-	ComposeFile       map[string]any
-	KMS               string
-	Listed            bool
-	Region            types.String
-	NodeID            int64
-	HasNodeID         bool
-	Image             types.String
-	CustomAppID       string
-	HasCustomAppID    bool
-	Nonce             int64
-	HasNonce          bool
-	DiskSize          types.Int64
-	SSHAuthorizedKeys []string
+	Name           string
+	Size           string
+	ComposeFile    map[string]any
+	KMS            string
+	Listed         bool
+	Region         types.String
+	NodeID         int64
+	HasNodeID      bool
+	Image          types.String
+	CustomAppID    string
+	HasCustomAppID bool
+	Nonce          int64
+	HasNonce       bool
+	DiskSize       types.Int64
 }
 
 func buildProvisionReq(f provisionFields) (*phala.ProvisionCVMRequest, error) {
@@ -364,9 +353,6 @@ func buildProvisionReq(f provisionFields) (*phala.ProvisionCVMRequest, error) {
 	if !f.DiskSize.IsNull() && !f.DiskSize.IsUnknown() {
 		ds := int(f.DiskSize.ValueInt64())
 		req.DiskSize = &ds
-	}
-	if len(f.SSHAuthorizedKeys) > 0 {
-		req.SSHAuthorizedKeys = f.SSHAuthorizedKeys
 	}
 	return req, nil
 }

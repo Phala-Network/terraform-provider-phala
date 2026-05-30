@@ -56,7 +56,8 @@ output "web_url" {
 - `docker_compose`, runtime visibility flags, OS image, encrypted env, and instance size are mutable in place on a single-CVM app — they target the bootstrap CVM via per-CVM PATCH endpoints.
 - `instances` exposes the current per-CVM view (bootstrap + any `phala_app_instance` slots).
 - `wait_for_ready = true` waits until the bootstrap CVM reports running before returning.
-- `ssh_authorized_keys`, `storage_fs`, placement fields, and deterministic identity inputs can affect replacement behavior; check the schema details below before changing them in-place.
+- `storage_fs`, placement fields, and deterministic identity inputs can affect replacement behavior; check the schema details below before changing them in-place.
+- SSH access is account-scoped: register keys with the [`phala_ssh_key`](ssh_key.md) resource. Keys on your account are injected into CVMs at launch — there is no per-app SSH key field.
 
 ## MIG-mode validation
 
@@ -121,7 +122,6 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `public_tcbinfo` (Boolean) Expose TCB attestation info publicly (compose file setting). Changing this triggers compose update/restart.
 - `region` (String) Preferred region identifier. Force-new.
 - `secure_time` (Boolean) Enable secure time mode (compose file setting). Changing this triggers compose update/restart.
-- `ssh_authorized_keys` (List of String) Per-deployment SSH public keys injected at launch via user_config. Force-new because runtime mutation is not exposed in current public API.
 - `storage_fs` (String) Storage filesystem for deployment (`zfs` or `ext4`). Immutable after initial deployment.
 - `wait_for_ready` (Boolean) Wait until status is running after create/update.
 - `wait_timeout_seconds` (Number) Wait timeout for async operations.

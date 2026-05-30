@@ -152,21 +152,20 @@ func TestBuildProvisionReq(t *testing.T) {
 
 	t.Run("with_all_optional_fields", func(t *testing.T) {
 		req, err := buildProvisionReq(provisionFields{
-			Name:              "test-cvm",
-			Size:              "tdx.large",
-			ComposeFile:       map[string]any{"name": "test"},
-			KMS:               "ethereum",
-			Listed:            true,
-			Region:            types.StringValue("us-east"),
-			NodeID:            42,
-			HasNodeID:         true,
-			Image:             types.StringValue("dstack-v0.3.5"),
-			CustomAppID:       "custom123",
-			HasCustomAppID:    true,
-			Nonce:             7,
-			HasNonce:          true,
-			DiskSize:          types.Int64Value(50),
-			SSHAuthorizedKeys: []string{"ssh-ed25519 AAAA..."},
+			Name:           "test-cvm",
+			Size:           "tdx.large",
+			ComposeFile:    map[string]any{"name": "test"},
+			KMS:            "ethereum",
+			Listed:         true,
+			Region:         types.StringValue("us-east"),
+			NodeID:         42,
+			HasNodeID:      true,
+			Image:          types.StringValue("dstack-v0.3.5"),
+			CustomAppID:    "custom123",
+			HasCustomAppID: true,
+			Nonce:          7,
+			HasNonce:       true,
+			DiskSize:       types.Int64Value(50),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -188,9 +187,6 @@ func TestBuildProvisionReq(t *testing.T) {
 		}
 		if req.DiskSize == nil || *req.DiskSize != 50 {
 			t.Errorf("disk_size = %v", req.DiskSize)
-		}
-		if len(req.SSHAuthorizedKeys) != 1 {
-			t.Errorf("ssh_authorized_keys = %v", req.SSHAuthorizedKeys)
 		}
 	})
 }

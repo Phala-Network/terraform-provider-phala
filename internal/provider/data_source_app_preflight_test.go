@@ -16,30 +16,24 @@ func TestBuildAppPreflightProvisionReq(t *testing.T) {
 	if diags.HasError() {
 		t.Fatalf("build env map: %v", diags)
 	}
-	sshKeys, diags := types.ListValueFrom(ctx, types.StringType, []string{"ssh-ed25519 AAAA..."})
-	if diags.HasError() {
-		t.Fatalf("build ssh keys: %v", diags)
-	}
-
 	req, reqDiags := buildAppPreflightProvisionReq(ctx, appPreflightDataSourceModel{
-		Name:              types.StringValue("demo"),
-		Size:              types.StringValue("tdx.small"),
-		Region:            types.StringValue("US-WEST-1"),
-		Image:             types.StringValue("dstack-dev-0.5.9"),
-		KMS:               types.StringValue("phala"),
-		NodeID:            types.Int64Value(42),
-		DockerCompose:     types.StringValue("services:\n  app:\n"),
-		PreLaunchScript:   types.StringValue("#!/bin/sh\necho ready\n"),
-		PublicLogs:        types.BoolValue(true),
-		PublicSysinfo:     types.BoolValue(false),
-		PublicTCBInfo:     types.BoolValue(true),
-		GatewayEnabled:    types.BoolValue(true),
-		SecureTime:        types.BoolValue(false),
-		StorageFS:         types.StringValue("zfs"),
-		DiskSize:          types.Int64Value(20),
-		Env:               envMap,
-		SSHAuthorizedKeys: sshKeys,
-		Listed:            types.BoolValue(false),
+		Name:            types.StringValue("demo"),
+		Size:            types.StringValue("tdx.small"),
+		Region:          types.StringValue("US-WEST-1"),
+		Image:           types.StringValue("dstack-dev-0.5.9"),
+		KMS:             types.StringValue("phala"),
+		NodeID:          types.Int64Value(42),
+		DockerCompose:   types.StringValue("services:\n  app:\n"),
+		PreLaunchScript: types.StringValue("#!/bin/sh\necho ready\n"),
+		PublicLogs:      types.BoolValue(true),
+		PublicSysinfo:   types.BoolValue(false),
+		PublicTCBInfo:   types.BoolValue(true),
+		GatewayEnabled:  types.BoolValue(true),
+		SecureTime:      types.BoolValue(false),
+		StorageFS:       types.StringValue("zfs"),
+		DiskSize:        types.Int64Value(20),
+		Env:             envMap,
+		Listed:          types.BoolValue(false),
 	})
 	if reqDiags.HasError() {
 		t.Fatalf("unexpected diagnostics: %v", reqDiags)
@@ -65,9 +59,6 @@ func TestBuildAppPreflightProvisionReq(t *testing.T) {
 	}
 	if req.KMSType == nil || *req.KMSType != "PHALA" {
 		t.Fatalf("unexpected kms_type: %#v", req.KMSType)
-	}
-	if len(req.SSHAuthorizedKeys) != 1 || req.SSHAuthorizedKeys[0] != "ssh-ed25519 AAAA..." {
-		t.Fatalf("missing ssh_authorized_keys: %#v", req.SSHAuthorizedKeys)
 	}
 
 	if req.ComposeFile == nil {

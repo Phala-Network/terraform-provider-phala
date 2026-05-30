@@ -36,13 +36,6 @@ variable "consumer_app_name" {
   default = "tf-smoke-consumer"
 }
 
-
-variable "cvm_ssh_authorized_keys" {
-  type        = list(string)
-  default     = []
-  description = "Optional per-deployment SSH public keys injected at CVM launch."
-}
-
 variable "app_env" {
   type        = map(string)
   default     = {}

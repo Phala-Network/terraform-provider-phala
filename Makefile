@@ -16,7 +16,6 @@ SSH_KEY_NAME ?= tf-smoke-key
 APP_NAME ?= tf-smoke-app
 CREATE_CONSUMER_APP ?= false
 CONSUMER_APP_NAME ?= tf-smoke-consumer
-CVM_SSH_AUTHORIZED_KEYS ?= []
 APP_ENV ?= {}
 CONSUMER_APP_ENV ?= {}
 CVM_POWER_STATE ?=
@@ -87,7 +86,6 @@ smoke-plan: smoke-init
 		TF_VAR_app_name="$(APP_NAME)" \
 		TF_VAR_create_consumer_app="$(CREATE_CONSUMER_APP)" \
 		TF_VAR_consumer_app_name="$(CONSUMER_APP_NAME)" \
-		TF_VAR_cvm_ssh_authorized_keys='$(CVM_SSH_AUTHORIZED_KEYS)' \
 		TF_VAR_app_env='$(APP_ENV)' \
 		TF_VAR_consumer_app_env='$(CONSUMER_APP_ENV)' \
 		TF_VAR_cvm_power_state='$(CVM_POWER_STATE)' \
@@ -108,7 +106,6 @@ smoke-apply: smoke-init
 		TF_VAR_app_name="$(APP_NAME)" \
 		TF_VAR_create_consumer_app="$(CREATE_CONSUMER_APP)" \
 		TF_VAR_consumer_app_name="$(CONSUMER_APP_NAME)" \
-		TF_VAR_cvm_ssh_authorized_keys='$(CVM_SSH_AUTHORIZED_KEYS)' \
 		TF_VAR_app_env='$(APP_ENV)' \
 		TF_VAR_consumer_app_env='$(CONSUMER_APP_ENV)' \
 		TF_VAR_cvm_power_state='$(CVM_POWER_STATE)' \
@@ -129,7 +126,6 @@ smoke-destroy: smoke-init
 		TF_VAR_app_name="$(APP_NAME)" \
 		TF_VAR_create_consumer_app="$(CREATE_CONSUMER_APP)" \
 		TF_VAR_consumer_app_name="$(CONSUMER_APP_NAME)" \
-		TF_VAR_cvm_ssh_authorized_keys='$(CVM_SSH_AUTHORIZED_KEYS)' \
 		TF_VAR_app_env='$(APP_ENV)' \
 		TF_VAR_consumer_app_env='$(CONSUMER_APP_ENV)' \
 		TF_VAR_cvm_power_state='$(CVM_POWER_STATE)' \
