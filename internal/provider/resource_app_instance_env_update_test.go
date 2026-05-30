@@ -197,8 +197,8 @@ func TestAppInstanceForceNewMatrix(t *testing.T) {
 		forceNew bool
 	}{
 		{"node_id", tftypes.NewValue(tftypes.Number, 18), true},
-		{"docker_compose", tftypes.NewValue(tftypes.String, "services:\n  x:\n"), true},
-		{"pre_launch_script", tftypes.NewValue(tftypes.String, "#!/bin/sh\necho hi\n"), true},
+		{"docker_compose", tftypes.NewValue(tftypes.String, "services:\n  x:\n"), false},
+		{"pre_launch_script", tftypes.NewValue(tftypes.String, "#!/bin/sh\necho hi\n"), false},
 		{"compose_hash", tftypes.NewValue(tftypes.String, "abc123"), true},
 		{"env", tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, map[string]tftypes.Value{
 			"SLOT_SECRET": tftypes.NewValue(tftypes.String, "v2"),

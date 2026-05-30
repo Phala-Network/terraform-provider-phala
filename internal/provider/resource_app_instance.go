@@ -105,17 +105,15 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"docker_compose": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: "Optional override Docker Compose YAML for this instance. " +
-					"When omitted, the backend uses the app's template instance. Changing forces replacement.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
+					"When omitted, the backend uses the app's template instance. Updated in place on " +
+					"the slot's CVM (via `PATCH /cvms/{uuid}/docker-compose`); `vm_uuid` is preserved. " +
+					"Only mutable on managed instances; adopted slots reject per-instance overrides.",
 			},
 			"pre_launch_script": schema.StringAttribute{
-				Optional:            true,
-				MarkdownDescription: "Optional pre-launch script content. Changing forces replacement.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
+				Optional: true,
+				MarkdownDescription: "Optional pre-launch script content. Updated in place on the slot's " +
+					"CVM (via `PATCH /cvms/{uuid}/pre-launch-script`); `vm_uuid` is preserved. " +
+					"Only mutable on managed instances; adopted slots reject per-instance overrides.",
 			},
 			"env": schema.MapAttribute{
 				Optional:    true,
@@ -460,11 +458,12 @@ func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateReq
 		return
 	}
 
-	// env is the only in-place-updatable input. Every other field is
-	// RequiresReplace, so the framework only routes here when env (or the
-	// provider-side wait_* knobs) changed. Start from prior state to preserve
-	// every computed attribute (vm_uuid, id, gateway_*, created_at, ...) and
-	// the managed flag; the env PATCH never replaces the CVM.
+	// env / docker_compose / pre_launch_script update in place on the slot's
+	// CVM. Every other field is RequiresReplace, so the framework only routes
+	// here when one of those (or the provider-side wait_* knobs) changed. Start
+	// from prior state to preserve every computed attribute (vm_uuid, id,
+	// gateway_*, created_at, ...) and the managed flag; the per-CVM PATCHes
+	// never replace the CVM.
 	plan.VMUUID = state.VMUUID
 	plan.InstanceID = state.InstanceID
 	plan.Status = state.Status
@@ -477,24 +476,27 @@ func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateReq
 	plan.ComposeHash = state.ComposeHash
 	plan.Managed = state.Managed
 
-	envChanged := !plan.Env.Equal(state.Env)
-	if !envChanged {
+	envChanged := !plan.Env.Equal(state.Env) || !plan.EncryptedEnv.Equal(state.EncryptedEnv)
+	composeChanged := !plan.DockerCompose.Equal(state.DockerCompose)
+	preLaunchChanged := !plan.PreLaunchScript.Equal(state.PreLaunchScript)
+
+	if !envChanged && !composeChanged && !preLaunchChanged {
 		// Only wait_for_ready / wait_timeout_seconds changed — provider-side
 		// polling knobs with no cloud effect. Accept into state, no API call.
 		resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 		return
 	}
 
-	// env on an adopted (managed=false) slot is rejected at Create for the same
-	// reason it can't be mutated here: the CVM is owned by phala_app, whose own
-	// env path should be used. Keep the guard symmetric.
+	// These per-instance overrides are rejected on an adopted (managed=false)
+	// slot for the same reason as at Create: the CVM is owned by phala_app,
+	// whose own update path should be used. Keep the guard symmetric.
 	if !state.Managed.ValueBool() {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("env"),
-			"Cannot update env on an adopted instance",
+		resp.Diagnostics.AddError(
+			"Cannot update an adopted instance in place",
 			"This phala_app_instance adopted a CVM owned by phala_app (managed = false). "+
-				"Set env on the parent phala_app for the bootstrap slot; per-instance env updates "+
-				"are only supported for CVMs created by phala_app_instance.",
+				"Update env / docker_compose / pre_launch_script on the parent phala_app for the "+
+				"bootstrap slot; per-instance updates are only supported for CVMs created by "+
+				"phala_app_instance.",
 		)
 		return
 	}
@@ -502,61 +504,81 @@ func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateReq
 	appID := ensureAppPrefix(strings.TrimSpace(plan.AppID.ValueString()))
 	cvmID := strings.TrimSpace(state.VMUUID.ValueString())
 	if cvmID == "" {
-		resp.Diagnostics.AddError("Missing CVM identity", "State has no vm_uuid for this instance; cannot target the env update.")
+		resp.Diagnostics.AddError("Missing CVM identity", "State has no vm_uuid for this instance; cannot target the in-place update.")
 		return
 	}
 
-	envCfg, envDiags := parseEnvConfig(
-		ctx,
-		plan.Env,
-		plan.EncryptedEnv,
-		types.ListNull(types.StringType),
-		types.StringNull(),
-		types.StringNull(),
-		false,
-	)
-	resp.Diagnostics.Append(envDiags...)
-	if resp.Diagnostics.HasError() {
-		return
+	if composeChanged {
+		if _, err := r.client.UpdateDockerCompose(ctx, cvmID, plan.DockerCompose.ValueString(), nil); err != nil {
+			summary, detail := diagnosticFromAPIError("Failed to update app instance docker compose", err)
+			resp.Diagnostics.AddError(summary, detail)
+			return
+		}
 	}
 
-	if envCfg.HasAutoEnv {
-		pubkey, err := r.loadAppEnvEncryptionPubkey(ctx, appID)
+	if preLaunchChanged {
+		script := ""
+		if !plan.PreLaunchScript.IsNull() && !plan.PreLaunchScript.IsUnknown() {
+			script = plan.PreLaunchScript.ValueString()
+		}
+		if _, err := r.client.UpdatePreLaunchScript(ctx, cvmID, script, nil); err != nil {
+			summary, detail := diagnosticFromAPIError("Failed to update app instance pre-launch script", err)
+			resp.Diagnostics.AddError(summary, detail)
+			return
+		}
+	}
+
+	if envChanged {
+		envCfg, envDiags := parseEnvConfig(
+			ctx,
+			plan.Env,
+			plan.EncryptedEnv,
+			types.ListNull(types.StringType),
+			types.StringNull(),
+			types.StringNull(),
+			false,
+		)
+		resp.Diagnostics.Append(envDiags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if envCfg.HasAutoEnv {
+			pubkey, err := r.loadAppEnvEncryptionPubkey(ctx, appID)
+			if err != nil {
+				resp.Diagnostics.AddError("Failed to load app encryption key", err.Error())
+				return
+			}
+			if pubkey == "" {
+				resp.Diagnostics.AddError("Missing encryption public key", "No CVM under the app returned encrypted_env_pubkey; cannot encrypt the updated env.")
+				return
+			}
+			if err := envCfg.encryptAutoEnv(pubkey); err != nil {
+				resp.Diagnostics.AddError("Failed to encrypt env", err.Error())
+				return
+			}
+		}
+		payload, err := envCfg.buildEnvUpdateReq(types.ListNull(types.StringType))
 		if err != nil {
-			resp.Diagnostics.AddError("Failed to load app encryption key", err.Error())
+			resp.Diagnostics.AddError("Missing encrypted_env", err.Error())
 			return
 		}
-		if pubkey == "" {
-			resp.Diagnostics.AddError("Missing encryption public key", "No CVM under the app returned encrypted_env_pubkey; cannot encrypt the updated env.")
-			return
-		}
-		if err := envCfg.encryptAutoEnv(pubkey); err != nil {
-			resp.Diagnostics.AddError("Failed to encrypt env", err.Error())
+		if _, err := r.client.UpdateCVMEnvs(ctx, cvmID, buildUpdateEnvsRequest(payload)); err != nil {
+			if apiErr, ok := err.(*phala.APIError); ok && apiErr.IsComposePrecondition() {
+				resp.Diagnostics.AddError(
+					"On-chain KMS not yet supported for phala_app_instance",
+					"The cloud API returned HTTP 465 (on-chain compose-hash registration required). "+
+						"phala_app_instance currently supports only the single-call PHALA KMS flow.",
+				)
+				return
+			}
+			summary, detail := diagnosticFromAPIError("Failed to update app instance env", err)
+			resp.Diagnostics.AddError(summary, detail)
 			return
 		}
 	}
 
-	payload, err := envCfg.buildEnvUpdateReq(types.ListNull(types.StringType))
-	if err != nil {
-		resp.Diagnostics.AddError("Missing encrypted_env", err.Error())
-		return
-	}
-	if _, err := r.client.UpdateCVMEnvs(ctx, cvmID, buildUpdateEnvsRequest(payload)); err != nil {
-		if apiErr, ok := err.(*phala.APIError); ok && apiErr.IsComposePrecondition() {
-			resp.Diagnostics.AddError(
-				"On-chain KMS not yet supported for phala_app_instance",
-				"The cloud API returned HTTP 465 (on-chain compose-hash registration required). "+
-					"phala_app_instance currently supports only the single-call PHALA KMS flow.",
-			)
-			return
-		}
-		summary, detail := diagnosticFromAPIError("Failed to update app instance env", err)
-		resp.Diagnostics.AddError(summary, detail)
-		return
-	}
-
-	// Refresh computed fields (status, etc.) from the now-updated CVM. The env
-	// PATCH does not change vm_uuid/name, so identity is preserved. Re-read is
+	// Refresh computed fields (status, etc.) from the now-updated CVM. The
+	// PATCHes do not change vm_uuid/name, so identity is preserved. Re-read is
 	// best-effort: on failure we keep the carried-over state values.
 	name := strings.TrimSpace(plan.Name.ValueString())
 	if shouldWait(plan.WaitForReady) {
