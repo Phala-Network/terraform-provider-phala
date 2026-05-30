@@ -104,12 +104,16 @@ func TestAppResourcePopulateStateKeepsUnmanagedPreLaunchScriptNull(t *testing.T)
 		PreLaunchScript: types.StringNull(),
 	}
 	app := &phala.AppInfo{
-		AppID: "app_test",
-		Name:  "demo",
+		AppInfoFields: phala.AppInfoFields{
+			AppID: "app_test",
+			Name:  "demo",
+		},
 	}
 	cvms := []phala.CVMInfo{{
-		VMUUID: strPtr("cvm123"),
-		Status: "running",
+		CVMInfoFields: phala.CVMInfoFields{
+			VMUUID: strPtr("cvm123"),
+			Status: "running",
+		},
 	}}
 
 	diags := resource.populateState(context.Background(), &state, app, cvms)
@@ -147,12 +151,16 @@ func TestAppResourcePopulateStateRefreshesManagedPreLaunchScript(t *testing.T) {
 		PreLaunchScript: types.StringValue("#!/bin/sh\necho old\n"),
 	}
 	app := &phala.AppInfo{
-		AppID: "app_test",
-		Name:  "demo",
+		AppInfoFields: phala.AppInfoFields{
+			AppID: "app_test",
+			Name:  "demo",
+		},
 	}
 	cvms := []phala.CVMInfo{{
-		VMUUID: strPtr("cvm123"),
-		Status: "running",
+		CVMInfoFields: phala.CVMInfoFields{
+			VMUUID: strPtr("cvm123"),
+			Status: "running",
+		},
 	}}
 
 	diags := resource.populateState(context.Background(), &state, app, cvms)
@@ -184,8 +192,10 @@ func TestAppResourcePopulateStatePreservesReplicaDerivedFieldsWithoutFreshCVMs(t
 		PreLaunchScript: types.StringValue("#!/bin/sh\necho existing\n"),
 	}
 	app := &phala.AppInfo{
-		AppID: "app_test",
-		Name:  "renamed",
+		AppInfoFields: phala.AppInfoFields{
+			AppID: "app_test",
+			Name:  "renamed",
+		},
 	}
 
 	resource := &appResource{}
@@ -230,21 +240,27 @@ func TestAppResourcePopulateStatePrefersCVMMatchingAppName(t *testing.T) {
 		DockerCompose: types.StringValue("services:\n  app:\n"),
 	}
 	app := &phala.AppInfo{
-		AppID: "app_test",
-		Name:  "consul-1",
+		AppInfoFields: phala.AppInfoFields{
+			AppID: "app_test",
+			Name:  "consul-1",
+		},
 	}
 	cvms := []phala.CVMInfo{
 		{
-			VMUUID:    strPtr("vm-managed-slot"),
-			Name:      "consul-1",
-			Status:    "running",
-			Endpoints: []phala.CVMEndpoint{{App: "https://managed.example"}},
+			CVMInfoFields: phala.CVMInfoFields{
+				VMUUID:    strPtr("vm-managed-slot"),
+				Name:      "consul-1",
+				Status:    "running",
+				Endpoints: []phala.CVMEndpoint{{App: "https://managed.example"}},
+			},
 		},
 		{
-			VMUUID:    strPtr("vm-bootstrap"),
-			Name:      "consul-0",
-			Status:    "running",
-			Endpoints: []phala.CVMEndpoint{{App: "https://bootstrap.example"}},
+			CVMInfoFields: phala.CVMInfoFields{
+				VMUUID:    strPtr("vm-bootstrap"),
+				Name:      "consul-0",
+				Status:    "running",
+				Endpoints: []phala.CVMEndpoint{{App: "https://bootstrap.example"}},
+			},
 		},
 	}
 
@@ -272,31 +288,37 @@ func TestAppResourcePopulateStateBuildsComputedInstances(t *testing.T) {
 		DockerCompose: types.StringValue("services:\n  app:\n"),
 	}
 	app := &phala.AppInfo{
-		AppID: "app_test",
-		Name:  "demo",
+		AppInfoFields: phala.AppInfoFields{
+			AppID: "app_test",
+			Name:  "demo",
+		},
 	}
 	cvms := []phala.CVMInfo{
 		{
-			VMUUID:     strPtr("vm-b"),
-			InstanceID: strPtr("inst-b"),
-			AppID:      strPtr("app_test"),
-			Name:       "demo-b",
-			Status:     "running",
-			CreatedAt:  strPtr("2026-05-02T11:00:00Z"),
-			Resource:   phala.CvmResource{InstanceType: strPtr("tdx.small")},
-			NodeInfo:   &phala.NodeRef{Region: strPtr("us-west-1")},
-			Endpoints:  []phala.CVMEndpoint{{App: "https://b.example"}},
+			CVMInfoFields: phala.CVMInfoFields{
+				VMUUID:     strPtr("vm-b"),
+				InstanceID: strPtr("inst-b"),
+				AppID:      strPtr("app_test"),
+				Name:       "demo-b",
+				Status:     "running",
+				CreatedAt:  strPtr("2026-05-02T11:00:00Z"),
+				Resource:   phala.CvmResource{InstanceType: strPtr("tdx.small")},
+				NodeInfo:   &phala.NodeRef{Region: strPtr("us-west-1")},
+				Endpoints:  []phala.CVMEndpoint{{App: "https://b.example"}},
+			},
 		},
 		{
-			VMUUID:     strPtr("vm-a"),
-			InstanceID: strPtr("inst-a"),
-			AppID:      strPtr("app_test"),
-			Name:       "demo-a",
-			Status:     "running",
-			CreatedAt:  strPtr("2026-05-02T10:00:00Z"),
-			Resource:   phala.CvmResource{InstanceType: strPtr("tdx.small")},
-			NodeInfo:   &phala.NodeRef{Region: strPtr("us-west-1")},
-			Endpoints:  []phala.CVMEndpoint{{App: "https://a.example"}},
+			CVMInfoFields: phala.CVMInfoFields{
+				VMUUID:     strPtr("vm-a"),
+				InstanceID: strPtr("inst-a"),
+				AppID:      strPtr("app_test"),
+				Name:       "demo-a",
+				Status:     "running",
+				CreatedAt:  strPtr("2026-05-02T10:00:00Z"),
+				Resource:   phala.CvmResource{InstanceType: strPtr("tdx.small")},
+				NodeInfo:   &phala.NodeRef{Region: strPtr("us-west-1")},
+				Endpoints:  []phala.CVMEndpoint{{App: "https://a.example"}},
+			},
 		},
 	}
 
@@ -343,7 +365,7 @@ func TestAppResourcePopulateStatePopulatesGatewayFields(t *testing.T) {
 		Name:          types.StringValue("demo-0"),
 		DockerCompose: types.StringValue("services:\n  app:\n"),
 	}
-	app := &phala.AppInfo{AppID: "app_test", Name: "demo-0"}
+	app := &phala.AppInfo{AppInfoFields: phala.AppInfoFields{AppID: "app_test", Name: "demo-0"}}
 
 	bootstrapBase := "dstack-pha-prod5.phala.network"
 	bootstrapCname := "demo.example.com"
@@ -351,20 +373,24 @@ func TestAppResourcePopulateStatePopulatesGatewayFields(t *testing.T) {
 
 	cvms := []phala.CVMInfo{
 		{
-			VMUUID:    strPtr("vm-bootstrap"),
-			Name:      "demo-0",
-			Status:    "running",
-			CreatedAt: strPtr("2026-05-19T10:00:00Z"),
-			Endpoints: []phala.CVMEndpoint{{App: "https://bootstrap.example"}},
-			Gateway:   &phala.CvmGatewayInfo{BaseDomain: &bootstrapBase, CNAME: &bootstrapCname},
+			CVMInfoFields: phala.CVMInfoFields{
+				VMUUID:    strPtr("vm-bootstrap"),
+				Name:      "demo-0",
+				Status:    "running",
+				CreatedAt: strPtr("2026-05-19T10:00:00Z"),
+				Endpoints: []phala.CVMEndpoint{{App: "https://bootstrap.example"}},
+				Gateway:   &phala.CvmGatewayInfo{BaseDomain: &bootstrapBase, CNAME: &bootstrapCname},
+			},
 		},
 		{
-			VMUUID:    strPtr("vm-member"),
-			Name:      "demo-1",
-			Status:    "running",
-			CreatedAt: strPtr("2026-05-19T11:00:00Z"),
-			Endpoints: []phala.CVMEndpoint{{App: "https://member.example"}},
-			Gateway:   &phala.CvmGatewayInfo{BaseDomain: &memberBase},
+			CVMInfoFields: phala.CVMInfoFields{
+				VMUUID:    strPtr("vm-member"),
+				Name:      "demo-1",
+				Status:    "running",
+				CreatedAt: strPtr("2026-05-19T11:00:00Z"),
+				Endpoints: []phala.CVMEndpoint{{App: "https://member.example"}},
+				Gateway:   &phala.CvmGatewayInfo{BaseDomain: &memberBase},
+			},
 		},
 	}
 
@@ -422,12 +448,14 @@ func TestAppResourcePopulateStateReportsCVMIDsInMembersMode(t *testing.T) {
 		DockerCompose: types.StringValue("services:\n  app:\n"),
 	}
 	app := &phala.AppInfo{
-		AppID: "app_test",
-		Name:  "consul-0",
+		AppInfoFields: phala.AppInfoFields{
+			AppID: "app_test",
+			Name:  "consul-0",
+		},
 	}
 	cvms := []phala.CVMInfo{
-		{VMUUID: strPtr("vm-a"), AppID: strPtr("app_test"), Name: "consul-0", Status: "running"},
-		{VMUUID: strPtr("vm-b"), AppID: strPtr("app_test"), Name: "consul-1", Status: "running"},
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: strPtr("vm-a"), AppID: strPtr("app_test"), Name: "consul-0", Status: "running"}},
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: strPtr("vm-b"), AppID: strPtr("app_test"), Name: "consul-1", Status: "running"}},
 	}
 
 	resource := &appResource{}
@@ -459,7 +487,9 @@ func TestImageMatchesUserForm(t *testing.T) {
 	osHash := "9b6a523983685016c0bf4a8a4ad930f86d283e5308c30e10fc0136db7c85f1fe"
 	name := "dstack-dev-0.5.7"
 	cvm := &phala.CVMInfo{
-		OS: &phala.CvmOsInfo{Name: &name, OSImageHash: &osHash},
+		CVMInfoFields: phala.CVMInfoFields{
+			OS: &phala.CvmOsInfo{Name: &name, OSImageHash: &osHash},
+		},
 	}
 
 	cases := []struct {
@@ -490,7 +520,7 @@ func TestImageMatchesUserForm(t *testing.T) {
 
 	t.Run("no os hash falls back to name-only match", func(t *testing.T) {
 		bareName := "dstack-dev-0.5.7"
-		bare := &phala.CVMInfo{OS: &phala.CvmOsInfo{Name: &bareName}}
+		bare := &phala.CVMInfo{CVMInfoFields: phala.CVMInfoFields{OS: &phala.CvmOsInfo{Name: &bareName}}}
 		if !cvmInfoImageMatchesUserForm(bare, "dstack-dev-0.5.7") {
 			t.Fatal("bare-name input should match when hash is absent")
 		}
@@ -514,13 +544,15 @@ func TestAppResourcePopulateStatePreservesUserImageForm(t *testing.T) {
 	osName := "dstack-dev-0.5.7"
 	cvms := []phala.CVMInfo{
 		{
-			VMUUID: strPtr("vm-aaa"),
-			Name:   "demo-0",
-			Status: "running",
-			OS:     &phala.CvmOsInfo{Name: &osName, OSImageHash: &hash},
+			CVMInfoFields: phala.CVMInfoFields{
+				VMUUID: strPtr("vm-aaa"),
+				Name:   "demo-0",
+				Status: "running",
+				OS:     &phala.CvmOsInfo{Name: &osName, OSImageHash: &hash},
+			},
 		},
 	}
-	app := &phala.AppInfo{AppID: "app_test", Name: "demo-0"}
+	app := &phala.AppInfo{AppInfoFields: phala.AppInfoFields{AppID: "app_test", Name: "demo-0"}}
 
 	t.Run("combined form is preserved", func(t *testing.T) {
 		state := appResourceModel{

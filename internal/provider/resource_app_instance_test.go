@@ -54,9 +54,9 @@ func TestValidateInstanceName(t *testing.T) {
 
 func TestFindInstanceByName(t *testing.T) {
 	cvms := []phala.CVMInfo{
-		{VMUUID: strPtr("vm-aaa"), Name: "consul-0"},
-		{VMUUID: strPtr("vm-bbb"), Name: "consul-1"},
-		{VMUUID: strPtr("vm-ccc"), Name: "Consul-2"}, // case-insensitive
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: strPtr("vm-aaa"), Name: "consul-0"}},
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: strPtr("vm-bbb"), Name: "consul-1"}},
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: strPtr("vm-ccc"), Name: "Consul-2"}}, // case-insensitive
 	}
 
 	match := findInstanceByName(cvms, "consul-1")
@@ -79,16 +79,20 @@ func TestFindInstanceByName(t *testing.T) {
 
 func TestMergeCVMResponseFillsEmptyFields(t *testing.T) {
 	base := phala.CVMInfo{
-		VMUUID: strPtr("vm-aaa"),
+		CVMInfoFields: phala.CVMInfoFields{
+			VMUUID: strPtr("vm-aaa"),
+		},
 	}
 	extra := phala.CVMInfo{
-		VMUUID:     strPtr("vm-aaa"),
-		Name:       "consul-0",
-		Status:     "running",
-		AppID:      strPtr("app_123"),
-		InstanceID: strPtr("inst-1"),
-		CreatedAt:  strPtr("2026-05-18T00:00:00Z"),
-		NodeInfo:   &phala.NodeRef{Region: strPtr("us-east")},
+		CVMInfoFields: phala.CVMInfoFields{
+			VMUUID:     strPtr("vm-aaa"),
+			Name:       "consul-0",
+			Status:     "running",
+			AppID:      strPtr("app_123"),
+			InstanceID: strPtr("inst-1"),
+			CreatedAt:  strPtr("2026-05-18T00:00:00Z"),
+			NodeInfo:   &phala.NodeRef{Region: strPtr("us-east")},
+		},
 	}
 	merged := mergeCVMResponse(base, extra)
 
@@ -102,15 +106,19 @@ func TestMergeCVMResponseFillsEmptyFields(t *testing.T) {
 
 func TestMergeCVMResponsePreservesStableBaseValuesAndRefreshesStatus(t *testing.T) {
 	base := phala.CVMInfo{
-		VMUUID: strPtr("vm-aaa"),
-		Name:   "consul-0",
-		Status: "starting",
+		CVMInfoFields: phala.CVMInfoFields{
+			VMUUID: strPtr("vm-aaa"),
+			Name:   "consul-0",
+			Status: "starting",
+		},
 	}
 	extra := phala.CVMInfo{
-		VMUUID:     strPtr("vm-aaa"),
-		Name:       "should-not-overwrite",
-		Status:     "running",
-		InProgress: false,
+		CVMInfoFields: phala.CVMInfoFields{
+			VMUUID:     strPtr("vm-aaa"),
+			Name:       "should-not-overwrite",
+			Status:     "running",
+			InProgress: false,
+		},
 	}
 	merged := mergeCVMResponse(base, extra)
 	if merged.Name != "consul-0" {
@@ -126,14 +134,16 @@ func TestPopulateAppInstanceState(t *testing.T) {
 	baseDomain := "dstack-pha-prod5.phala.network"
 	cname := "demo.example.com"
 	cvm := phala.CVMInfo{
-		VMUUID:     strPtr("vm-aaa"),
-		InstanceID: strPtr("inst-1"),
-		Status:     "running",
-		CreatedAt:  strPtr("2026-05-18T00:00:00Z"),
-		Resource:   phala.CvmResource{InstanceType: strPtr("tdx.small")},
-		NodeInfo:   &phala.NodeRef{Region: strPtr("us-east")},
-		Endpoints:  []phala.CVMEndpoint{{App: "https://example.com"}},
-		Gateway:    &phala.CvmGatewayInfo{BaseDomain: &baseDomain, CNAME: &cname},
+		CVMInfoFields: phala.CVMInfoFields{
+			VMUUID:     strPtr("vm-aaa"),
+			InstanceID: strPtr("inst-1"),
+			Status:     "running",
+			CreatedAt:  strPtr("2026-05-18T00:00:00Z"),
+			Resource:   phala.CvmResource{InstanceType: strPtr("tdx.small")},
+			NodeInfo:   &phala.NodeRef{Region: strPtr("us-east")},
+			Endpoints:  []phala.CVMEndpoint{{App: "https://example.com"}},
+			Gateway:    &phala.CvmGatewayInfo{BaseDomain: &baseDomain, CNAME: &cname},
+		},
 	}
 	populateAppInstanceState(&state, "app_test", "consul-0", cvm)
 
@@ -181,7 +191,7 @@ func TestGatewayHelpersMissingFields(t *testing.T) {
 	}
 
 	// Gateway present, both members nil.
-	r = &phala.CVMInfo{Gateway: &phala.CvmGatewayInfo{}}
+	r = &phala.CVMInfo{CVMInfoFields: phala.CVMInfoFields{Gateway: &phala.CvmGatewayInfo{}}}
 	if got := cvmInfoGatewayBaseDomain(r); got != "" {
 		t.Fatalf("nil base_domain pointer should be empty, got %q", got)
 	}
@@ -192,7 +202,7 @@ func TestGatewayHelpersMissingFields(t *testing.T) {
 	// Whitespace must be trimmed.
 	bd := "  dstack-pha-prod5.phala.network  "
 	cn := "  demo.example.com  "
-	r = &phala.CVMInfo{Gateway: &phala.CvmGatewayInfo{BaseDomain: &bd, CNAME: &cn}}
+	r = &phala.CVMInfo{CVMInfoFields: phala.CVMInfoFields{Gateway: &phala.CvmGatewayInfo{BaseDomain: &bd, CNAME: &cn}}}
 	if got := cvmInfoGatewayBaseDomain(r); got != "dstack-pha-prod5.phala.network" {
 		t.Fatalf("base_domain not trimmed: %q", got)
 	}

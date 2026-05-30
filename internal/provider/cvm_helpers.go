@@ -21,7 +21,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func cvmInfoIDString(info *phala.CVMInfo) string {
-	return strings.TrimSpace(info.IDString())
+	return strings.TrimSpace(info.ID)
 }
 
 func cvmInfoEnvEncryptionPubkey(info *phala.CVMInfo) string {

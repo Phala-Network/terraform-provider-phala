@@ -58,10 +58,10 @@ func TestCollectVMUUIDs(t *testing.T) {
 	emptyStr := ""
 	spaceStr := "   "
 	cvms := []phala.CVMInfo{
-		{VMUUID: strPtr("vm-a")},
-		{VMUUID: &emptyStr},
-		{VMUUID: &spaceStr}, // whitespace
-		{VMUUID: strPtr("vm-c")},
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: strPtr("vm-a")}},
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: &emptyStr}},
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: &spaceStr}}, // whitespace
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: strPtr("vm-c")}},
 	}
 	got := collectVMUUIDs(cvms)
 	if len(got) != 2 || got[0] != "vm-a" || got[1] != "vm-c" {

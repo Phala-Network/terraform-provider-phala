@@ -562,8 +562,8 @@ func (r *appInstanceResource) fetchAppCVMs(ctx context.Context, appID string) ([
 		return nil, err
 	}
 	items := make([]phala.CVMInfo, 0, len(rawItems))
-	for _, raw := range rawItems {
-		items = append(items, normalizeCVMFromAny(raw))
+	for i := range rawItems {
+		items = append(items, normalizeCVMInfo(rawItems[i]))
 	}
 	return normalizeCVMInfos(items), nil
 }
@@ -726,7 +726,7 @@ func mergeCVMResponse(base, extra phala.CVMInfo) phala.CVMInfo {
 	if cvmInfoGatewayBaseDomain(&base) == "" && cvmInfoGatewayBaseDomain(&extra) != "" {
 		base.Gateway = extra.Gateway
 	}
-	if base.IDString() == "" {
+	if strings.TrimSpace(base.ID) == "" {
 		base.ID = extra.ID
 	}
 	return base

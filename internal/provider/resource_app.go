@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"sort"
@@ -709,8 +708,8 @@ func (r *appResource) fetchAppCVMs(ctx context.Context, appID string) ([]phala.C
 		return nil, err
 	}
 	items := make([]phala.CVMInfo, 0, len(rawItems))
-	for _, raw := range rawItems {
-		items = append(items, normalizeCVMFromAny(raw))
+	for i := range rawItems {
+		items = append(items, normalizeCVMInfo(rawItems[i]))
 	}
 	return normalizeCVMInfos(items), nil
 }
@@ -1225,7 +1224,7 @@ func normalizeCVMInfos(cvms []phala.CVMInfo) []phala.CVMInfo {
 			vmUUID == "" &&
 			strings.TrimSpace(cvm.Name) == "" &&
 			strings.TrimSpace(cvm.Status) == "" &&
-			cvm.IDString() == "" {
+			strings.TrimSpace(cvm.ID) == "" {
 			continue
 		}
 		out = append(out, cvm)
@@ -1233,87 +1232,17 @@ func normalizeCVMInfos(cvms []phala.CVMInfo) []phala.CVMInfo {
 	return out
 }
 
-func normalizeCVMFromAny(raw map[string]any) phala.CVMInfo {
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return phala.CVMInfo{}
-	}
-	var out phala.CVMInfo
-	if err := json.Unmarshal(b, &out); err != nil {
-		return phala.CVMInfo{}
-	}
-	if appID := cvmInfoAppID(&out); appID != "" {
+// normalizeCVMInfo applies the app_id-prefix normalization the provider
+// relies on. As of the versioned-hashid SDK refactor, GetAppCVMs returns
+// fully-typed CVMInfo values (the cloud no longer surfaces the legacy
+// "hosted"-nested admin shape on the workspace-scoped endpoint), so the
+// only normalization left is ensuring the app_id carries the "app_" prefix.
+func normalizeCVMInfo(cvm phala.CVMInfo) phala.CVMInfo {
+	if appID := cvmInfoAppID(&cvm); appID != "" {
 		normalized := ensureAppPrefix(appID)
-		out.AppID = &normalized
+		cvm.AppID = &normalized
 	}
-
-	// The API sometimes nests CVM fields inside a "hosted" sub-object.
-	// Unmarshal it separately and use as fallback for any empty top-level fields.
-	hostedRaw, ok := raw["hosted"].(map[string]any)
-	if !ok {
-		return out
-	}
-	hb, err := json.Marshal(hostedRaw)
-	if err != nil {
-		return out
-	}
-	var hosted phala.CVMInfo
-	if err := json.Unmarshal(hb, &hosted); err != nil {
-		return out
-	}
-
-	if out.Name == "" {
-		out.Name = hosted.Name
-	}
-	if out.Status == "" {
-		out.Status = hosted.Status
-	}
-	if cvmInfoAppID(&out) == "" && cvmInfoAppID(&hosted) != "" {
-		normalized := ensureAppPrefix(cvmInfoAppID(&hosted))
-		out.AppID = &normalized
-	}
-	if cvmInfoInstanceID(&out) == "" && cvmInfoInstanceID(&hosted) != "" {
-		v := cvmInfoInstanceID(&hosted)
-		out.InstanceID = &v
-	}
-	if cvmInfoVMUUID(&out) == "" {
-		if id := cvmInfoIDString(&hosted); id != "" {
-			out.VMUUID = &id
-		}
-	}
-	if cvmInfoOSImageName(&out) == "" {
-		if img := cvmInfoOSImageName(&hosted); img != "" {
-			out.BaseImage = &img
-		}
-	}
-	if cvmInfoStorageFSValue(&out) == "" {
-		if sf := cvmInfoStorageFSValue(&hosted); sf != "" {
-			out.StorageFS = &sf
-		}
-	}
-	if out.PublicLogs == nil {
-		out.PublicLogs = hosted.PublicLogs
-	}
-	if out.PublicSysinfo == nil {
-		out.PublicSysinfo = hosted.PublicSysinfo
-	}
-	if out.PublicTcbinfo == nil {
-		out.PublicTcbinfo = hosted.PublicTcbinfo
-	}
-	if out.GatewayEnabled == nil {
-		out.GatewayEnabled = hosted.GatewayEnabled
-	}
-	if out.SecureTime == nil {
-		out.SecureTime = hosted.SecureTime
-	}
-	if out.IDString() == "" {
-		out.ID = hosted.ID
-	}
-	if appURL := stringFromAny(hostedRaw["app_url"]); appURL != "" && len(out.Endpoints) == 0 {
-		out.Endpoints = append(out.Endpoints, phala.CVMEndpoint{App: appURL})
-	}
-
-	return out
+	return cvm
 }
 
 func appPath(id string) string {
