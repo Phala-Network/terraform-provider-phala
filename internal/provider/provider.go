@@ -16,8 +16,15 @@ import (
 )
 
 const (
-	DefaultAPIPrefix  = "https://cloud-api.phala.com/api/v1"
-	DefaultAPIVersion = "2026-01-21"
+	DefaultAPIPrefix = "https://cloud-api.phala.com/api/v1"
+	// DefaultAPIVersion must track the SDK's DefaultAPIVersion: the SDK's
+	// default response types are the hashed-CVM-id schemas (CVMInfoV20260522,
+	// CommitCVMProvisionResponseV20260522, etc.), which decode `id` as the
+	// "cvm_<hashid>" string. The backend only emits that shape when the
+	// X-Phala-Version header requests it; sending an older version returns
+	// integer ids that fail to decode. Keep this in lockstep with
+	// github.com/Phala-Network/phala-cloud/sdks/go version.DefaultAPIVersion.
+	DefaultAPIVersion = "2026-05-22"
 	DefaultTimeoutSec = 30
 )
 
