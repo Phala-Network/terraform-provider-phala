@@ -329,6 +329,7 @@ type applyMembersModeArgs struct {
 	composeHasKeys  bool
 	updateEnvKeys   bool
 	settingsChanged bool
+	listedChanged   bool
 }
 
 type applySingleCVMArgs struct {
@@ -343,6 +344,7 @@ type applySingleCVMArgs struct {
 	composeHasKeys  bool
 	updateEnvKeys   bool
 	settingsChanged bool
+	listedChanged   bool
 }
 
 // applyMembersModeUpdate is the slot-preserving update path for apps in
@@ -487,7 +489,29 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 		}
 	}
 
+	if a.listedChanged {
+		if err := r.patchListedAcrossCVMs(ctx, a.vmUUIDs, a.plan.Listed.ValueBool()); err != nil {
+			diags.AddError("Failed to update app listed flag", err.Error())
+			return diags
+		}
+	}
+
 	return diags
+}
+
+// patchListedAcrossCVMs toggles the public marketplace listing on every CVM
+// by vm_uuid. Pure metadata flag — no redeploy.
+func (r *appResource) patchListedAcrossCVMs(ctx context.Context, vmUUIDs []string, listed bool) error {
+	for _, vmUUID := range vmUUIDs {
+		id := strings.TrimSpace(vmUUID)
+		if id == "" {
+			continue
+		}
+		if err := r.client.UpdateCVMListed(ctx, id, listed); err != nil {
+			return fmt.Errorf("patch listed on CVM %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 // applySingleCVMUpdate is the legacy single-CVM update path: each changed
@@ -577,6 +601,13 @@ func (r *appResource) applySingleCVMUpdate(ctx context.Context, a applySingleCVM
 				return diags
 			}
 			diags.AddError("Failed to update app encrypted env", err.Error())
+			return diags
+		}
+	}
+
+	if a.listedChanged {
+		if err := r.client.UpdateCVMListed(ctx, a.bootstrapID, a.plan.Listed.ValueBool()); err != nil {
+			diags.AddError("Failed to update app listed flag", err.Error())
 			return diags
 		}
 	}
