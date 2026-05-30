@@ -1,0 +1,52 @@
+# Prek (pre-commit) configuration for terraform-provider-phala.
+# Install: prek install
+# Run all: prek run --all-files
+# Docs: https://prek.j178.dev
+
+fail_fast: true
+
+repos:
+  # ── Basic file hygiene ────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.(md|mdx)$
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  # ── Local hooks ───────────────────────────────────────────────────────
+  # Mirrors `make ci` (fmt-check → vet → test) from the Makefile so any
+  # regression caught by CI is also caught on commit. `build-release` is
+  # intentionally skipped — it's slow and CI is the source of truth for
+  # packaged output.
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        entry: bash -c 'out="$(gofmt -l $(find . -name "*.go" -not -path "./vendor/*"))"; if [ -n "$out" ]; then echo "Files need gofmt:"; echo "$out"; exit 1; fi'
+        language: system
+        files: \.go$
+        pass_filenames: false
+        priority: 10
+
+      - id: govet
+        name: go vet
+        entry: bash -c 'go vet ./...'
+        language: system
+        files: \.go$
+        pass_filenames: false
+        priority: 20
+
+      - id: gotest
+        name: go test
+        entry: bash -c 'go test ./...'
+        language: system
+        files: \.go$
+        pass_filenames: false
+        require_serial: true
+        priority: 30

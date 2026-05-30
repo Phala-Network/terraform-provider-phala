@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -12,7 +13,7 @@ import (
 var _ datasource.DataSource = &workspaceDataSource{}
 
 type workspaceDataSource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type workspaceDataSourceModel struct {
@@ -65,11 +66,11 @@ func (d *workspaceDataSource) Configure(_ context.Context, req datasource.Config
 		return
 	}
 
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring workspace data source.",
+			"Expected *phala.Client while configuring workspace data source.",
 		)
 		return
 	}
@@ -78,7 +79,7 @@ func (d *workspaceDataSource) Configure(_ context.Context, req datasource.Config
 }
 
 func (d *workspaceDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
-	me, err := fetchAuthMe(ctx, d.client)
+	me, err := d.client.GetCurrentUser(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to read workspace info", err.Error())
 		return
@@ -94,7 +95,7 @@ func (d *workspaceDataSource) Read(ctx context.Context, _ datasource.ReadRequest
 	state := workspaceDataSourceModel{
 		ID:     types.StringValue(wsID),
 		Name:   nullableString(me.Workspace.Name),
-		Slug:   nullableString(me.Workspace.Slug),
+		Slug:   nullableStringPtr(me.Workspace.Slug),
 		Tier:   nullableString(me.Workspace.Tier),
 		Role:   nullableString(me.Workspace.Role),
 		Avatar: nullableStringPtr(me.Workspace.Avatar),

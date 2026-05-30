@@ -2,9 +2,9 @@ package provider
 
 import (
 	"context"
-	"net/url"
 	"strings"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -17,7 +17,7 @@ var _ resource.Resource = &sshKeyResource{}
 var _ resource.ResourceWithImportState = &sshKeyResource{}
 
 type sshKeyResource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type sshKeyResourceModel struct {
@@ -29,17 +29,6 @@ type sshKeyResourceModel struct {
 	Source      types.String `tfsdk:"source"`
 	CreatedAt   types.String `tfsdk:"created_at"`
 	UpdatedAt   types.String `tfsdk:"updated_at"`
-}
-
-type sshKeyAPI struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	PublicKey   string `json:"public_key"`
-	Fingerprint string `json:"fingerprint"`
-	KeyType     string `json:"key_type"`
-	Source      string `json:"source"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
 }
 
 func NewSSHKeyResource() resource.Resource {
@@ -119,11 +108,11 @@ func (r *sshKeyResource) Configure(_ context.Context, req resource.ConfigureRequ
 		return
 	}
 
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring ssh_key resource.",
+			"Expected *phala.Client while configuring ssh_key resource.",
 		)
 		return
 	}
@@ -138,19 +127,17 @@ func (r *sshKeyResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	payload := map[string]string{
-		"name":       plan.Name.ValueString(),
-		"public_key": plan.PublicKey.ValueString(),
-	}
-
-	var created sshKeyAPI
-	if err := r.client.PostJSON(ctx, "/user/ssh-keys", payload, &created); err != nil {
+	created, err := r.client.CreateSSHKey(ctx, &phala.CreateSSHKeyRequest{
+		Name:      plan.Name.ValueString(),
+		PublicKey: plan.PublicKey.ValueString(),
+	})
+	if err != nil {
 		resp.Diagnostics.AddError("Failed to create SSH key", err.Error())
 		return
 	}
 
 	state := plan
-	state.mergeAPI(created)
+	state.mergeAPI(*created)
 	if state.ID.IsNull() || state.ID.IsUnknown() || state.ID.ValueString() == "" {
 		resp.Diagnostics.AddError("Invalid create response", "Created SSH key response did not include id.")
 		return
@@ -219,7 +206,7 @@ func (r *sshKeyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		return
 	}
 
-	if err := r.client.Delete(ctx, "/user/ssh-keys/"+url.PathEscape(id)); err != nil && !isNotFound(err) {
+	if err := r.client.DeleteSSHKey(ctx, id); err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete SSH key", err.Error())
 	}
 }
@@ -235,9 +222,9 @@ func (r *sshKeyResource) ImportState(
 // findSSHKey fetches all SSH keys and scans for the given id.
 // The Phala Cloud API does not expose a GET /user/ssh-keys/{id} endpoint,
 // so a list-and-filter is the only option.
-func (r *sshKeyResource) findSSHKey(ctx context.Context, id string) (*sshKeyAPI, error) {
-	var keys []sshKeyAPI
-	if err := r.client.GetJSON(ctx, "/user/ssh-keys", &keys); err != nil {
+func (r *sshKeyResource) findSSHKey(ctx context.Context, id string) (*phala.SSHKey, error) {
+	keys, err := r.client.ListSSHKeys(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -249,7 +236,7 @@ func (r *sshKeyResource) findSSHKey(ctx context.Context, id string) (*sshKeyAPI,
 	return nil, nil
 }
 
-func (m *sshKeyResourceModel) mergeAPI(api sshKeyAPI) {
+func (m *sshKeyResourceModel) mergeAPI(api phala.SSHKey) {
 	if v := strings.TrimSpace(api.ID); v != "" {
 		m.ID = types.StringValue(v)
 	}
@@ -259,9 +246,9 @@ func (m *sshKeyResourceModel) mergeAPI(api sshKeyAPI) {
 	if v := strings.TrimSpace(api.PublicKey); v != "" {
 		m.PublicKey = types.StringValue(v)
 	}
-	m.Fingerprint = nullableString(api.Fingerprint)
-	m.KeyType = nullableString(api.KeyType)
-	m.Source = nullableString(api.Source)
-	m.CreatedAt = nullableString(api.CreatedAt)
-	m.UpdatedAt = nullableString(api.UpdatedAt)
+	m.Fingerprint = nullableStringPtr(api.Fingerprint)
+	m.KeyType = nullableStringPtr(api.KeyType)
+	m.Source = nullableStringPtr(api.Source)
+	m.CreatedAt = nullableStringPtr(api.CreatedAt)
+	m.UpdatedAt = nullableStringPtr(api.UpdatedAt)
 }

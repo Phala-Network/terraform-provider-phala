@@ -2,9 +2,11 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strings"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -13,7 +15,7 @@ import (
 var _ datasource.DataSource = &regionsDataSource{}
 
 type regionsDataSource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 type regionsDataSourceModel struct {
@@ -58,11 +60,11 @@ func (d *regionsDataSource) Configure(_ context.Context, req datasource.Configur
 		return
 	}
 
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring regions data source.",
+			"Expected *phala.Client while configuring regions data source.",
 		)
 		return
 	}
@@ -74,18 +76,31 @@ func (d *regionsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, 
 	regions := map[string]bool{}
 	loaded := false
 
-	var filters struct {
-		Regions []string `json:"regions"`
-	}
-	if err := d.client.GetJSON(ctx, "/apps/filter-options", &filters); err == nil {
-		for _, region := range filters.Regions {
-			key := strings.TrimSpace(region)
-			if key == "" {
-				continue
+	// GetAppFilterOptions returns map[string]any — decode the "regions" key manually.
+	filterOpts, err := d.client.GetAppFilterOptions(ctx)
+	if err == nil {
+		encoded, jsonErr := json.Marshal(filterOpts)
+		if jsonErr == nil {
+			var filters struct {
+				Regions []string `json:"regions"`
 			}
-			regions[key] = false
+			if jsonErr = json.Unmarshal(encoded, &filters); jsonErr == nil {
+				for _, region := range filters.Regions {
+					key := strings.TrimSpace(region)
+					if key == "" {
+						continue
+					}
+					regions[key] = false
+				}
+				loaded = true
+			}
 		}
-		loaded = true
+		if !loaded {
+			resp.Diagnostics.AddWarning(
+				"Could not decode filter-options regions",
+				"Unexpected response shape from /apps/filter-options.",
+			)
+		}
 	} else {
 		resp.Diagnostics.AddWarning(
 			"Could not read filter-options regions",
@@ -93,14 +108,14 @@ func (d *regionsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, 
 		)
 	}
 
-	var availability struct {
-		Nodes []struct {
-			RegionIdentifier string `json:"region_identifier"`
-		} `json:"nodes"`
-	}
-	if err := d.client.GetJSON(ctx, "/teepods/available", &availability); err == nil {
+	// GetAvailableNodes returns typed *phala.AvailableNodes.
+	availability, err := d.client.GetAvailableNodes(ctx)
+	if err == nil {
 		for _, node := range availability.Nodes {
-			region := strings.TrimSpace(node.RegionIdentifier)
+			if node.RegionIdentifier == nil {
+				continue
+			}
+			region := strings.TrimSpace(*node.RegionIdentifier)
 			if region == "" {
 				continue
 			}

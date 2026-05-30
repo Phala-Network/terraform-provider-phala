@@ -4,6 +4,22 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the provider's custom HTTP client and `oapi-codegen`-generated client with the official Phala Cloud Go SDK (`github.com/Phala-Network/phala-cloud/sdks/go`), eliminating ~37k lines of duplicated API code. All API calls now use typed SDK methods (`ProvisionCVM`, `GetCVMInfo`, `CreateAppInstance`, `UpdateCVMEnvs`, `UpdateOSImage`, `UpdateCVMResources`, `UpdateDockerCompose`, `UpdatePreLaunchScript`, `GetAppInfo`, `GetAppCVMs`, `DeleteCVM`, `RedeployAppRevision`, etc.).
+- Provider error diagnostics now surface SDK structured error codes (`error_code`, suggestions, links) via `APIError.IsStructured()` / `FormatError()`.
+- **Default API version is now `2026-05-22`** (was `2026-01-21`). The SDK's default response schemas are the hashed-CVM-id types (`id` is the `cvm_<hashid>` string), which the backend only emits when `X-Phala-Version` requests this version; the older header returned integer ids that failed to decode. Override via `api_version` in the provider block if you need to pin a different version. This keeps lockstep with the SDK's `version.DefaultAPIVersion`.
+
+### Removed
+
+- `internal/phalaapi/` (oapi-codegen output)
+- `openapi/` (vendored spec + generator)
+- Custom `APIClient`, `cvmAPIResponse`, `appAPIResponse` types — replaced by SDK equivalents.
+
+### Fixed
+
+- `storage_fs` regression introduced during the SDK migration (re-opens the original [#5](https://github.com/Phala-Network/terraform-provider-phala/issues/5)): the attribute lost its `UseStateForUnknown` plan modifier, so as an Optional+Computed field it planned as `(known after apply)` on every in-place update and tripped `RequiresReplace` — forcing a full app + slot replacement (new `app_id`, new `vm_uuid`s) on changes as small as a `docker_compose` edit. Restored the modifier; in-place updates in members (MIG) mode again preserve slot identity.
+
 ## [0.3.0-beta.3] - 2026-05-20
 
 Surfaces the Phala Cloud gateway DNS info on `phala_app` and `phala_app_instance` so downstream consumers can build per-port public URLs from provider outputs instead of hardcoding the cloud's gateway domain. Also fixes a Create-time apply error that bit anyone setting `image` to the combined `<name>-<short-hash>` form.

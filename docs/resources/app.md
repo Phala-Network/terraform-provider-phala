@@ -104,7 +104,7 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `custom_app_id` (String) Optional custom app_id for deterministic identity flow. Changing this forces replacement.
 - `disk_size` (Number) Disk size in GB.
 - `encrypted_env` (String, Sensitive) Hex-encoded encrypted env payload (manual mode).
-- `env` (Map of String) Plaintext env vars. Values are encrypted before API submission, but plaintext is stored in Terraform state — pass secret values via variables marked `sensitive = true` to redact them in plan output.
+- `env` (Map of String) Plaintext env vars. Provider auto-derives env_keys and encrypts values before API submission. Plaintext still exists in Terraform state. Mark sensitive values at the variable level rather than the schema level (see Phala-Network/phala-cloud#246: schema-level Sensitive on a Map causes Terraform Core to suppress in-place env diffs).
 - `env_compose_hash` (String) Optional compose hash for phase-2 encrypted env update flow (contract-owned KMS; used with env_transaction_hash).
 - `env_keys` (List of String) Allowed environment variable keys used with encrypted_env/manual mode.
 - `env_transaction_hash` (String) Optional on-chain transaction hash for phase-2 encrypted env update flow (contract-owned KMS; used with env_compose_hash).

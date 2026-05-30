@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -54,11 +55,13 @@ func membersListFromValues(t *testing.T, vals ...string) types.List {
 }
 
 func TestCollectVMUUIDs(t *testing.T) {
-	cvms := []cvmAPIResponse{
-		{VMUUID: "vm-a"},
-		{VMUUID: ""},
-		{VMUUID: "   "}, // whitespace
-		{VMUUID: "vm-c"},
+	emptyStr := ""
+	spaceStr := "   "
+	cvms := []phala.CVMInfo{
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: strPtr("vm-a")}},
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: &emptyStr}},
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: &spaceStr}}, // whitespace
+		{CVMInfoFields: phala.CVMInfoFields{VMUUID: strPtr("vm-c")}},
 	}
 	got := collectVMUUIDs(cvms)
 	if len(got) != 2 || got[0] != "vm-a" || got[1] != "vm-c" {
@@ -90,7 +93,7 @@ func TestProvisionAndFindRevision(t *testing.T) {
 	defer srv.Close()
 
 	r := &appResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 	composeHash, err := r.provisionComposeRevision(context.Background(), "vm-boot", map[string]any{
 		"name": "demo-coordinator-0",
@@ -134,7 +137,7 @@ func TestFindRevisionPaginates(t *testing.T) {
 	defer srv.Close()
 
 	r := &appResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 	revID, err := r.findRevisionIDByComposeHash(context.Background(), "app_test", "targethash")
 	if err != nil {
@@ -164,7 +167,7 @@ func TestRedeployAcrossCVMsPostsExpectedBody(t *testing.T) {
 	defer srv.Close()
 
 	r := &appResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 	err := r.redeployRevisionAcrossCVMs(context.Background(), "app_test", "rev_42",
 		[]string{"vm-aaa", "vm-bbb"})
@@ -193,7 +196,7 @@ func TestRedeploySurfaces465(t *testing.T) {
 	}))
 	defer srv.Close()
 	r := &appResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 	err := r.redeployRevisionAcrossCVMs(context.Background(), "app_test", "rev_42", []string{"vm-aaa"})
 	if err == nil {
@@ -216,17 +219,17 @@ func TestPatchEnvAcrossCVMsFansOutSequentially(t *testing.T) {
 			mu.Lock()
 			patchedPath = append(patchedPath, r.URL.Path)
 			mu.Unlock()
-			w.WriteHeader(http.StatusOK)
+			writeJSON(t, w, http.StatusOK, `{}`)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 	r := &appResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 	err := r.patchEnvAcrossCVMs(context.Background(), []string{"vm-a", "vm-b", "vm-c"},
-		map[string]any{"encrypted_env": "deadbeef"})
+		&phala.UpdateEnvsRequest{EncryptedEnv: "deadbeef"})
 	if err != nil {
 		t.Fatalf("patchEnvAcrossCVMs: %v", err)
 	}
@@ -253,17 +256,17 @@ func TestPatchEnvAcrossCVMsFailFast(t *testing.T) {
 				writeJSON(t, w, http.StatusBadRequest, `{"detail":"second CVM rejected"}`)
 				return
 			}
-			w.WriteHeader(http.StatusOK)
+			writeJSON(t, w, http.StatusOK, `{}`)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 	r := &appResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 	err := r.patchEnvAcrossCVMs(context.Background(), []string{"vm-a", "vm-b", "vm-c"},
-		map[string]any{"encrypted_env": "deadbeef"})
+		&phala.UpdateEnvsRequest{EncryptedEnv: "deadbeef"})
 	if err == nil {
 		t.Fatal("expected error from second CVM rejection")
 	}
@@ -302,7 +305,7 @@ func TestWaitForCVMsOnComposeHashSucceedsOnAllSettled(t *testing.T) {
 	}))
 	defer srv.Close()
 	r := &appResource{
-		client: NewAPIClient(srv.URL+"/api/v1", "phat_test_key", "2026-01-21", 5*time.Second),
+		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
 	if err := r.waitForCVMsOnComposeHash(context.Background(), "app_test", "newhash",
 		time.Now().Add(30*time.Second)); err != nil {

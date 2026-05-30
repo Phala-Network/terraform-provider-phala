@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -14,7 +15,7 @@ import (
 var _ resource.Resource = &appPreflightResource{}
 
 type appPreflightResource struct {
-	client *APIClient
+	client *phala.Client
 }
 
 func NewAppPreflightResource() resource.Resource {
@@ -202,11 +203,11 @@ func (r *appPreflightResource) Configure(_ context.Context, req resource.Configu
 		return
 	}
 
-	client, ok := req.ProviderData.(*APIClient)
+	client, ok := req.ProviderData.(*phala.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			"Expected *APIClient while configuring app preflight resource.",
+			"Expected *phala.Client while configuring app preflight resource.",
 		)
 		return
 	}
