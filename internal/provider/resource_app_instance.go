@@ -89,7 +89,10 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"name": schema.StringAttribute{
 				Required: true,
 				MarkdownDescription: "Stable logical member name (5-63 chars, starts with a letter, " +
-					"letters/digits/hyphens only). Immutable; renaming forces replacement.",
+					"letters/digits/hyphens only). This is the slot's durable identity: it forms the " +
+					"resource ID (`<app_id>:<name>`), drives adopt-by-name, and is the typical `for_each` " +
+					"key. Renaming forces replacement (a different name is a different slot) — even though " +
+					"the cloud has a CVM-rename endpoint, the Terraform identity can't be mutated in place.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
