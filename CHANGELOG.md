@@ -20,6 +20,7 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ### Fixed
 
+- `phala_app.listed` now updates **in place** instead of forcing replacement. Toggling the marketplace-listing flag previously destroyed and recreated the CVM(s); it now uses the dedicated `PATCH /cvms/{uuid}/listed` endpoint (a plain metadata write — no redeploy, no restart, no attestation change), fanned out across every slot in members mode. Live-verified: a `false → true` flip applied in ~6s with `vm_uuid` preserved and a clean follow-up plan. (Adds SDK method `UpdateCVMListed`.)
 - `storage_fs` regression introduced during the SDK migration (re-opens the original [#5](https://github.com/Phala-Network/terraform-provider-phala/issues/5)): the attribute lost its `UseStateForUnknown` plan modifier, so as an Optional+Computed field it planned as `(known after apply)` on every in-place update and tripped `RequiresReplace` — forcing a full app + slot replacement (new `app_id`, new `vm_uuid`s) on changes as small as a `docker_compose` edit. Restored the modifier; in-place updates in members (MIG) mode again preserve slot identity.
 
 ## [0.3.0-beta.3] - 2026-05-20

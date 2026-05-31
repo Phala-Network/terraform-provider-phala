@@ -168,12 +168,14 @@ func sharedCVMSchemaAttrs() map[string]schema.Attribute {
 				"(contract-owned KMS; used with env_compose_hash).",
 		},
 		"listed": schema.BoolAttribute{
-			Optional:            true,
-			Computed:            true,
-			Default:             booldefault.StaticBool(false),
-			MarkdownDescription: "Whether the resource should be publicly listed. Force-new.",
+			Optional: true,
+			Computed: true,
+			Default:  booldefault.StaticBool(false),
+			MarkdownDescription: "Whether the app's CVM(s) are publicly listed in the marketplace. " +
+				"Updated in place via `PATCH /cvms/{uuid}/listed` (a plain metadata flag — no redeploy, " +
+				"no restart, no attestation change), fanned out across every slot in members mode.",
 			PlanModifiers: []planmodifier.Bool{
-				boolplanmodifier.RequiresReplace(),
+				boolplanmodifier.UseStateForUnknown(),
 			},
 		},
 		"wait_for_ready": schema.BoolAttribute{

@@ -460,6 +460,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	planSettings := composeSettingsValues{plan.PublicLogs, plan.PublicSysinfo, plan.PublicTCBInfo, plan.GatewayEnabled, plan.SecureTime}
 	stateSettings := composeSettingsValues{state.PublicLogs, state.PublicSysinfo, state.PublicTCBInfo, state.GatewayEnabled, state.SecureTime}
 	settingsChanged := planSettings.changed(stateSettings)
+	listedChanged := !plan.Listed.IsUnknown() && !plan.Listed.Equal(state.Listed)
 
 	diskSizeChanged, diskDiags := diskSizeValidation(plan.DiskSize, state.DiskSize)
 	resp.Diagnostics.Append(diskDiags...)
@@ -548,6 +549,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 			composeHasKeys:  composeHasEnvKeys,
 			updateEnvKeys:   updateComposeEnvKeys,
 			settingsChanged: settingsChanged,
+			listedChanged:   listedChanged,
 		}); diags.HasError() {
 			resp.Diagnostics.Append(diags...)
 			return
@@ -568,6 +570,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 			composeHasKeys:  composeHasEnvKeys,
 			updateEnvKeys:   updateComposeEnvKeys,
 			settingsChanged: settingsChanged,
+			listedChanged:   listedChanged,
 		}); diags.HasError() {
 			resp.Diagnostics.Append(diags...)
 			return

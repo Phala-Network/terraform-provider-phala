@@ -112,7 +112,7 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `gateway_enabled` (Boolean) Enable public gateway routing (compose file setting). Changing this triggers compose update/restart.
 - `image` (String) OS image name.
 - `kms` (String) KMS type for app provisioning (`phala`, `ethereum`, `base`). Changing this forces replacement.
-- `listed` (Boolean) Whether the resource should be publicly listed. Force-new.
+- `listed` (Boolean) Whether the app's CVM(s) are publicly listed in the marketplace. Updated in place via `PATCH /cvms/{uuid}/listed` (a plain metadata flag — no redeploy, no restart, no attestation change), fanned out across every slot in members mode.
 - `members` (List of String) Optional list of stable slot names this app's replica set is composed of (MIG-style usage). When set, `name` must be one of these values, and `replicas` must be unset or 1 — the legacy anonymous-replica path is incompatible with named slots. Downstream `phala_app_instance` resources should derive their `for_each` from this attribute so the slot list is the single source of truth.
 - `node_id` (Number) Optional target node (teepod) ID for initial placement. Changing this forces replacement.
 - `nonce` (Number) Optional nonce paired with custom_app_id for PHALA KMS deterministic app_id flow. Changing this forces replacement.
