@@ -10,7 +10,6 @@ app_replicas     = 1
 create_consumer_app = false
 consumer_app_name = "tf-smoke-consumer"
 consumer_app_replicas = 1
-cvm_ssh_authorized_keys = []
 app_env          = {}
 consumer_app_env = {}
 cvm_power_state  = ""

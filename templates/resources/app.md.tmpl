@@ -20,7 +20,8 @@ description: |-
 - `docker_compose`, runtime visibility flags, OS image, encrypted env, and instance size are mutable in place on a single-CVM app — they target the bootstrap CVM via per-CVM PATCH endpoints.
 - `instances` exposes the current per-CVM view (bootstrap + any `phala_app_instance` slots).
 - `wait_for_ready = true` waits until the bootstrap CVM reports running before returning.
-- `ssh_authorized_keys`, `storage_fs`, placement fields, and deterministic identity inputs can affect replacement behavior; check the schema details below before changing them in-place.
+- `storage_fs`, placement fields, and deterministic identity inputs can affect replacement behavior; check the schema details below before changing them in-place.
+- SSH access is account-scoped: register keys with the [`phala_ssh_key`](ssh_key.md) resource. Keys on your account are injected into CVMs at launch — there is no per-app SSH key field.
 
 ## MIG-mode validation
 

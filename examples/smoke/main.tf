@@ -40,7 +40,6 @@ resource "phala_app" "smoke" {
   size                = local.selected_size
   region              = var.region != "" ? var.region : null
   image               = var.image != "" ? var.image : null
-  ssh_authorized_keys = var.cvm_ssh_authorized_keys
   env                 = var.app_env
   docker_compose      = var.docker_compose
 
@@ -55,7 +54,6 @@ resource "phala_app" "consumer" {
   size                = local.selected_size
   region              = var.region != "" ? var.region : null
   image               = var.image != "" ? var.image : null
-  ssh_authorized_keys = var.cvm_ssh_authorized_keys
   env = merge(
     var.consumer_app_env,
     {

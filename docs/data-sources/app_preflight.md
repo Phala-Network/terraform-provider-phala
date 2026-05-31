@@ -39,7 +39,6 @@ Runs Phala Cloud app provision/preflight and returns the compose hash without co
 - `public_tcbinfo` (Boolean) Expose TCB attestation info publicly.
 - `region` (String) Preferred region identifier.
 - `secure_time` (Boolean) Enable secure time mode.
-- `ssh_authorized_keys` (List of String) Per-deployment SSH public keys injected at launch via user_config.
 - `storage_fs` (String) Storage filesystem for deployment (`zfs` or `ext4`).
 
 ### Read-Only

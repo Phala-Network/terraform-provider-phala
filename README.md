@@ -161,9 +161,6 @@ resource "phala_app" "web" {
   name           = "my-phala-web"
   size           = local.chosen_size
   region         = local.chosen_region
-  ssh_authorized_keys = [
-    file("~/.ssh/id_ed25519.pub"),
-  ]
   env = {
     APP_SECRET = "replace-me"
   }
@@ -309,7 +306,6 @@ make smoke-apply \
   CREATE_CONSUMER_APP=true \
   CONSUMER_APP_NAME="tf-smoke-consumer" \
   CONSUMER_APP_REPLICAS=1 \
-  CVM_SSH_AUTHORIZED_KEYS='["ssh-ed25519 AAAA... your-key"]' \
   APP_ENV='{"APP_SECRET":"replace-me"}' \
   CVM_POWER_STATE="stopped" \
   WAIT_FOR_READY=false \
@@ -323,7 +319,6 @@ make smoke-destroy \
   CREATE_CONSUMER_APP=true \
   CONSUMER_APP_NAME="tf-smoke-consumer" \
   CONSUMER_APP_REPLICAS=1 \
-  CVM_SSH_AUTHORIZED_KEYS='["ssh-ed25519 AAAA... your-key"]' \
   APP_ENV='{"APP_SECRET":"replace-me"}' \
   CVM_POWER_STATE="stopped" \
   WAIT_FOR_READY=false \
@@ -358,7 +353,7 @@ Notes:
   - `secure_time`
   - `storage_fs`
 - Changing compose-file runtime settings triggers compose provision/apply flow and CVM restart.
-- Per-deployment SSH keys are supported via `ssh_authorized_keys` (applied at create time using `user_config`; force-new).
+- SSH access is managed at the account level with the `phala_ssh_key` resource. The keys registered on your account are injected into CVMs at launch; there is no per-app SSH key field.
 - `storage_fs` is immutable after initial deployment (`zfs` or `ext4`); changing it forces replacement.
 - `disk_size` can only grow (shrink is rejected).
 - CPU/RAM changes are supported through `size` updates.
@@ -375,7 +370,7 @@ Notes:
 - Manual encrypted fields:
   - `encrypted_env` (sensitive, pass-through hex blob)
   - `env_keys` (allowed env keys)
-- Force-new fields: `name`, `region`, `listed`, `ssh_authorized_keys`, `storage_fs`.
+- Force-new fields: `name`, `region`, `listed`, `storage_fs`.
 
 ### `phala_attestation` (data source)
 

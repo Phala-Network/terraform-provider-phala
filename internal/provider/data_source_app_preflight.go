@@ -20,28 +20,27 @@ type appPreflightDataSource struct {
 }
 
 type appPreflightDataSourceModel struct {
-	ID                types.String `tfsdk:"id"`
-	Name              types.String `tfsdk:"name"`
-	Region            types.String `tfsdk:"region"`
-	Size              types.String `tfsdk:"size"`
-	Image             types.String `tfsdk:"image"`
-	KMS               types.String `tfsdk:"kms"`
-	NodeID            types.Int64  `tfsdk:"node_id"`
-	CustomAppID       types.String `tfsdk:"custom_app_id"`
-	Nonce             types.Int64  `tfsdk:"nonce"`
-	PublicLogs        types.Bool   `tfsdk:"public_logs"`
-	PublicSysinfo     types.Bool   `tfsdk:"public_sysinfo"`
-	PublicTCBInfo     types.Bool   `tfsdk:"public_tcbinfo"`
-	GatewayEnabled    types.Bool   `tfsdk:"gateway_enabled"`
-	SecureTime        types.Bool   `tfsdk:"secure_time"`
-	StorageFS         types.String `tfsdk:"storage_fs"`
-	DiskSize          types.Int64  `tfsdk:"disk_size"`
-	DockerCompose     types.String `tfsdk:"docker_compose"`
-	PreLaunchScript   types.String `tfsdk:"pre_launch_script"`
-	SSHAuthorizedKeys types.List   `tfsdk:"ssh_authorized_keys"`
-	Env               types.Map    `tfsdk:"env"`
-	EnvKeys           types.List   `tfsdk:"env_keys"`
-	Listed            types.Bool   `tfsdk:"listed"`
+	ID              types.String `tfsdk:"id"`
+	Name            types.String `tfsdk:"name"`
+	Region          types.String `tfsdk:"region"`
+	Size            types.String `tfsdk:"size"`
+	Image           types.String `tfsdk:"image"`
+	KMS             types.String `tfsdk:"kms"`
+	NodeID          types.Int64  `tfsdk:"node_id"`
+	CustomAppID     types.String `tfsdk:"custom_app_id"`
+	Nonce           types.Int64  `tfsdk:"nonce"`
+	PublicLogs      types.Bool   `tfsdk:"public_logs"`
+	PublicSysinfo   types.Bool   `tfsdk:"public_sysinfo"`
+	PublicTCBInfo   types.Bool   `tfsdk:"public_tcbinfo"`
+	GatewayEnabled  types.Bool   `tfsdk:"gateway_enabled"`
+	SecureTime      types.Bool   `tfsdk:"secure_time"`
+	StorageFS       types.String `tfsdk:"storage_fs"`
+	DiskSize        types.Int64  `tfsdk:"disk_size"`
+	DockerCompose   types.String `tfsdk:"docker_compose"`
+	PreLaunchScript types.String `tfsdk:"pre_launch_script"`
+	Env             types.Map    `tfsdk:"env"`
+	EnvKeys         types.List   `tfsdk:"env_keys"`
+	Listed          types.Bool   `tfsdk:"listed"`
 
 	AppID               types.String `tfsdk:"app_id"`
 	ComposeHash         types.String `tfsdk:"compose_hash"`
@@ -139,11 +138,6 @@ func (d *appPreflightDataSource) Schema(_ context.Context, _ datasource.SchemaRe
 			"pre_launch_script": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Optional pre-launch script content.",
-			},
-			"ssh_authorized_keys": schema.ListAttribute{
-				Optional:            true,
-				ElementType:         types.StringType,
-				MarkdownDescription: "Per-deployment SSH public keys injected at launch via user_config.",
 			},
 			"env": schema.MapAttribute{
 				Optional:            true,
@@ -321,9 +315,6 @@ func buildAppPreflightProvisionReq(ctx context.Context, config appPreflightDataS
 		diags.AddError("Invalid node_id", "node_id must be greater than 0.")
 	}
 
-	sshAuthorizedKeys, keyDiags := listValueAsStrings(ctx, config.SSHAuthorizedKeys, "ssh_authorized_keys")
-	diags.Append(keyDiags...)
-
 	envKeys, hasEnvKeys, envDiags := composeEnvKeysFromAttrs(ctx, config.Env, config.EnvKeys)
 	diags.Append(envDiags...)
 
@@ -348,21 +339,20 @@ func buildAppPreflightProvisionReq(ctx context.Context, config appPreflightDataS
 	})
 
 	provReq, err := buildProvisionReq(provisionFields{
-		Name:              config.Name.ValueString(),
-		Size:              config.Size.ValueString(),
-		ComposeFile:       composeFile,
-		KMS:               identity.KMSType,
-		Listed:            listed,
-		Region:            config.Region,
-		NodeID:            nodeID,
-		HasNodeID:         hasNodeID,
-		Image:             config.Image,
-		CustomAppID:       identity.CustomAppID,
-		HasCustomAppID:    identity.HasCustomAppID,
-		Nonce:             identity.Nonce,
-		HasNonce:          identity.HasNonce,
-		DiskSize:          config.DiskSize,
-		SSHAuthorizedKeys: sshAuthorizedKeys,
+		Name:           config.Name.ValueString(),
+		Size:           config.Size.ValueString(),
+		ComposeFile:    composeFile,
+		KMS:            identity.KMSType,
+		Listed:         listed,
+		Region:         config.Region,
+		NodeID:         nodeID,
+		HasNodeID:      hasNodeID,
+		Image:          config.Image,
+		CustomAppID:    identity.CustomAppID,
+		HasCustomAppID: identity.HasCustomAppID,
+		Nonce:          identity.Nonce,
+		HasNonce:       identity.HasNonce,
+		DiskSize:       config.DiskSize,
 	})
 	if err != nil {
 		diags.AddError("Invalid provision parameters", err.Error())

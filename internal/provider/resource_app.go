@@ -48,7 +48,6 @@ type appResourceModel struct {
 	DiskSize           types.Int64  `tfsdk:"disk_size"`
 	DockerCompose      types.String `tfsdk:"docker_compose"`
 	PreLaunchScript    types.String `tfsdk:"pre_launch_script"`
-	SSHAuthorizedKeys  types.List   `tfsdk:"ssh_authorized_keys"`
 	Env                types.Map    `tfsdk:"env"`
 	EncryptedEnv       types.String `tfsdk:"encrypted_env"`
 	EnvKeys            types.List   `tfsdk:"env_keys"`
@@ -290,12 +289,6 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
-	sshAuthorizedKeys, diags := listValueAsStrings(ctx, plan.SSHAuthorizedKeys, "ssh_authorized_keys")
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
 	envCfg, envDiags := parseEnvConfig(ctx, plan.Env, plan.EncryptedEnv, plan.EnvKeys, plan.EnvComposeHash, plan.EnvTransactionHash, true)
 	resp.Diagnostics.Append(envDiags...)
 	if resp.Diagnostics.HasError() {
@@ -317,21 +310,20 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 	})
 
 	provReq, err := buildProvisionReq(provisionFields{
-		Name:              plan.Name.ValueString(),
-		Size:              plan.Size.ValueString(),
-		ComposeFile:       composeFile,
-		KMS:               identity.KMSType,
-		Listed:            plan.Listed.ValueBool(),
-		Region:            plan.Region,
-		NodeID:            nodeID,
-		HasNodeID:         hasNodeID,
-		Image:             plan.Image,
-		CustomAppID:       identity.CustomAppID,
-		HasCustomAppID:    identity.HasCustomAppID,
-		Nonce:             identity.Nonce,
-		HasNonce:          identity.HasNonce,
-		DiskSize:          plan.DiskSize,
-		SSHAuthorizedKeys: sshAuthorizedKeys,
+		Name:           plan.Name.ValueString(),
+		Size:           plan.Size.ValueString(),
+		ComposeFile:    composeFile,
+		KMS:            identity.KMSType,
+		Listed:         plan.Listed.ValueBool(),
+		Region:         plan.Region,
+		NodeID:         nodeID,
+		HasNodeID:      hasNodeID,
+		Image:          plan.Image,
+		CustomAppID:    identity.CustomAppID,
+		HasCustomAppID: identity.HasCustomAppID,
+		Nonce:          identity.Nonce,
+		HasNonce:       identity.HasNonce,
+		DiskSize:       plan.DiskSize,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid provision parameters", err.Error())

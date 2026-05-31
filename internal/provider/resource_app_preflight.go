@@ -105,11 +105,6 @@ func (r *appPreflightResource) Schema(_ context.Context, _ resource.SchemaReques
 				Optional:            true,
 				MarkdownDescription: "Optional pre-launch script content.",
 			},
-			"ssh_authorized_keys": schema.ListAttribute{
-				Optional:            true,
-				ElementType:         types.StringType,
-				MarkdownDescription: "Per-deployment SSH public keys injected at launch via user_config.",
-			},
 			"env": schema.MapAttribute{
 				Optional:            true,
 				Sensitive:           true,
