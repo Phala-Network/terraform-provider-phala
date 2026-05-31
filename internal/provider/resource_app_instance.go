@@ -15,7 +15,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -90,7 +89,10 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"name": schema.StringAttribute{
 				Required: true,
 				MarkdownDescription: "Stable logical member name (5-63 chars, starts with a letter, " +
-					"letters/digits/hyphens only). Immutable; renaming forces replacement.",
+					"letters/digits/hyphens only). This is the slot's durable identity: it forms the " +
+					"resource ID (`<app_id>:<name>`), drives adopt-by-name, and is the typical `for_each` " +
+					"key. Renaming forces replacement (a different name is a different slot) — even though " +
+					"the cloud has a CVM-rename endpoint, the Terraform identity can't be mutated in place.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -106,41 +108,42 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"docker_compose": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: "Optional override Docker Compose YAML for this instance. " +
-					"When omitted, the backend uses the app's template instance. Changing forces replacement.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
+					"When omitted, the backend uses the app's template instance. Updated in place on " +
+					"the slot's CVM (via `PATCH /cvms/{uuid}/docker-compose`); `vm_uuid` is preserved. " +
+					"Only mutable on managed instances; adopted slots reject per-instance overrides.",
 			},
 			"pre_launch_script": schema.StringAttribute{
-				Optional:            true,
-				MarkdownDescription: "Optional pre-launch script content. Changing forces replacement.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
+				Optional: true,
+				MarkdownDescription: "Optional pre-launch script content. Updated in place on the slot's " +
+					"CVM (via `PATCH /cvms/{uuid}/pre-launch-script`); `vm_uuid` is preserved. " +
+					"Only mutable on managed instances; adopted slots reject per-instance overrides.",
 			},
 			"env": schema.MapAttribute{
 				Optional:    true,
 				Sensitive:   true,
 				ElementType: types.StringType,
 				MarkdownDescription: "Plaintext env vars for this instance. Values are encrypted before API submission, " +
-					"but plaintext is stored in Terraform state. Changing forces replacement. The parent app compose " +
-					"must already allow these env keys.",
-				PlanModifiers: []planmodifier.Map{
-					mapplanmodifier.RequiresReplace(),
-				},
+					"but plaintext is stored in Terraform state. Updated in place on the slot's CVM " +
+					"(via `PATCH /cvms/{uuid}/envs`) — the `vm_uuid` is preserved, mirroring `phala_app.env`. " +
+					"The parent app compose must already allow these env keys. Only settable on instances created " +
+					"by this resource (`managed = true`); adopted bootstrap slots reject per-instance env.",
 			},
 			"encrypted_env": schema.StringAttribute{
-				Optional:            true,
-				Sensitive:           true,
-				MarkdownDescription: "Optional hex-encoded encrypted env payload to seed at create time.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
+				Optional:  true,
+				Sensitive: true,
+				MarkdownDescription: "Optional hex-encoded pre-encrypted env payload — the manual " +
+					"alternative to `env` (mutually exclusive with it). Updated in place on the slot's " +
+					"CVM via the same `PATCH /cvms/{uuid}/envs` as `env`, preserving `vm_uuid`. Only " +
+					"mutable on managed instances; adopted slots reject per-instance overrides.",
 			},
 			"compose_hash": schema.StringAttribute{
 				Optional: true,
-				MarkdownDescription: "Optional explicit compose hash. When omitted the backend resolves it " +
-					"from `docker_compose` (if provided) or the app's current revision. Changing forces replacement.",
+				MarkdownDescription: "Content-addressed pointer to an existing compose revision of the parent " +
+					"app: deploy the slot from a compose the app already has, without re-uploading the YAML. " +
+					"Mutually exclusive with `docker_compose` (the backend rejects both), and must reference a " +
+					"revision that belongs to this app. When omitted, the backend uses `docker_compose` (if set) " +
+					"or the app's current revision. Selecting a different revision is a new provisioning input, so " +
+					"changing it forces replacement.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -454,14 +457,166 @@ func (r *appInstanceResource) Read(ctx context.Context, req resource.ReadRequest
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
-func (r *appInstanceResource) Update(_ context.Context, _ resource.UpdateRequest, resp *resource.UpdateResponse) {
-	// All meaningful inputs are RequiresReplace. The only updatable fields are
-	// wait_for_ready / wait_timeout_seconds, which control provider-side polling
-	// only — accept the new plan into state without making any API calls.
-	resp.Diagnostics.AddError(
-		"phala_app_instance has no in-place update path",
-		"All input fields are RequiresReplace. If this Update was reached, the framework will recreate the resource instead.",
-	)
+func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan, state appInstanceResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// env / docker_compose / pre_launch_script update in place on the slot's
+	// CVM. Every other field is RequiresReplace, so the framework only routes
+	// here when one of those (or the provider-side wait_* knobs) changed. Start
+	// from prior state to preserve every computed attribute (vm_uuid, id,
+	// gateway_*, created_at, ...) and the managed flag; the per-CVM PATCHes
+	// never replace the CVM.
+	plan.VMUUID = state.VMUUID
+	plan.InstanceID = state.InstanceID
+	plan.Status = state.Status
+	plan.Region = state.Region
+	plan.InstanceType = state.InstanceType
+	plan.Endpoint = state.Endpoint
+	plan.GatewayBaseDomain = state.GatewayBaseDomain
+	plan.GatewayCname = state.GatewayCname
+	plan.CreatedAt = state.CreatedAt
+	plan.ComposeHash = state.ComposeHash
+	plan.Managed = state.Managed
+
+	// `env` (auto) and `encrypted_env` (manual, mutually exclusive with env)
+	// both land at PATCH /cvms/{uuid}/envs and update in place. The backend's
+	// envs endpoint only requires `encrypted_env`; `env_keys` is optional and,
+	// when unchanged, takes the direct-update path — so a bare encrypted_env
+	// swap updates in place without replacement. `compose_hash` stays
+	// RequiresReplace (it's a content-addressed pointer to a compose/revision,
+	// not freely settable alongside docker_compose).
+	envChanged := !plan.Env.Equal(state.Env) || !plan.EncryptedEnv.Equal(state.EncryptedEnv)
+	composeChanged := !plan.DockerCompose.Equal(state.DockerCompose)
+	preLaunchChanged := !plan.PreLaunchScript.Equal(state.PreLaunchScript)
+
+	if !envChanged && !composeChanged && !preLaunchChanged {
+		// Only wait_for_ready / wait_timeout_seconds changed — provider-side
+		// polling knobs with no cloud effect. Accept into state, no API call.
+		resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+		return
+	}
+
+	// These per-instance overrides are rejected on an adopted (managed=false)
+	// slot for the same reason as at Create: the CVM is owned by phala_app,
+	// whose own update path should be used. Keep the guard symmetric.
+	if !state.Managed.ValueBool() {
+		resp.Diagnostics.AddError(
+			"Cannot update an adopted instance in place",
+			"This phala_app_instance adopted a CVM owned by phala_app (managed = false). "+
+				"Update env / docker_compose / pre_launch_script on the parent phala_app for the "+
+				"bootstrap slot; per-instance updates are only supported for CVMs created by "+
+				"phala_app_instance.",
+		)
+		return
+	}
+
+	appID := ensureAppPrefix(strings.TrimSpace(plan.AppID.ValueString()))
+	cvmID := strings.TrimSpace(state.VMUUID.ValueString())
+	if cvmID == "" {
+		resp.Diagnostics.AddError("Missing CVM identity", "State has no vm_uuid for this instance; cannot target the in-place update.")
+		return
+	}
+
+	if composeChanged {
+		if _, err := r.client.UpdateDockerCompose(ctx, cvmID, plan.DockerCompose.ValueString(), nil); err != nil {
+			summary, detail := diagnosticFromAPIError("Failed to update app instance docker compose", err)
+			resp.Diagnostics.AddError(summary, detail)
+			return
+		}
+	}
+
+	if preLaunchChanged {
+		script := ""
+		if !plan.PreLaunchScript.IsNull() && !plan.PreLaunchScript.IsUnknown() {
+			script = plan.PreLaunchScript.ValueString()
+		}
+		if _, err := r.client.UpdatePreLaunchScript(ctx, cvmID, script, nil); err != nil {
+			summary, detail := diagnosticFromAPIError("Failed to update app instance pre-launch script", err)
+			resp.Diagnostics.AddError(summary, detail)
+			return
+		}
+	}
+
+	if envChanged {
+		envCfg, envDiags := parseEnvConfig(
+			ctx,
+			plan.Env,
+			plan.EncryptedEnv,
+			types.ListNull(types.StringType),
+			types.StringNull(),
+			types.StringNull(),
+			false,
+		)
+		resp.Diagnostics.Append(envDiags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if envCfg.HasAutoEnv {
+			pubkey, err := r.loadAppEnvEncryptionPubkey(ctx, appID)
+			if err != nil {
+				resp.Diagnostics.AddError("Failed to load app encryption key", err.Error())
+				return
+			}
+			if pubkey == "" {
+				resp.Diagnostics.AddError("Missing encryption public key", "No CVM under the app returned encrypted_env_pubkey; cannot encrypt the updated env.")
+				return
+			}
+			if err := envCfg.encryptAutoEnv(pubkey); err != nil {
+				resp.Diagnostics.AddError("Failed to encrypt env", err.Error())
+				return
+			}
+		}
+		payload, err := envCfg.buildEnvUpdateReq(types.ListNull(types.StringType))
+		if err != nil {
+			resp.Diagnostics.AddError("Missing encrypted_env", err.Error())
+			return
+		}
+		if _, err := r.client.UpdateCVMEnvs(ctx, cvmID, buildUpdateEnvsRequest(payload)); err != nil {
+			if apiErr, ok := err.(*phala.APIError); ok && apiErr.IsComposePrecondition() {
+				resp.Diagnostics.AddError(
+					"On-chain KMS not yet supported for phala_app_instance",
+					"The cloud API returned HTTP 465 (on-chain compose-hash registration required). "+
+						"phala_app_instance currently supports only the single-call PHALA KMS flow.",
+				)
+				return
+			}
+			summary, detail := diagnosticFromAPIError("Failed to update app instance env", err)
+			resp.Diagnostics.AddError(summary, detail)
+			return
+		}
+	}
+
+	// Refresh computed fields (status, etc.) from the now-updated CVM. The
+	// PATCHes do not change vm_uuid/name, so identity is preserved. Re-read is
+	// best-effort: on failure we keep the carried-over state values.
+	name := strings.TrimSpace(plan.Name.ValueString())
+	if shouldWait(plan.WaitForReady) {
+		deadline := time.Now().Add(waitTimeout(plan.WaitTimeoutSecond))
+		if _, err := r.waitForInstanceRunning(ctx, appID, name, deadline); err != nil {
+			resp.Diagnostics.AddError("Instance did not return to ready after env update", err.Error())
+			return
+		}
+	}
+	if cvm, err := r.fetchCVM(ctx, cvmID); err == nil && cvm != nil {
+		refreshed := plan
+		populateAppInstanceState(&refreshed, appID, name, *cvm)
+		refreshed.Env = plan.Env
+		refreshed.EncryptedEnv = plan.EncryptedEnv
+		refreshed.Managed = state.Managed
+		refreshed.WaitForReady = plan.WaitForReady
+		refreshed.WaitTimeoutSecond = plan.WaitTimeoutSecond
+		refreshed.NodeID = plan.NodeID
+		refreshed.DockerCompose = plan.DockerCompose
+		refreshed.PreLaunchScript = plan.PreLaunchScript
+		plan = refreshed
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
 func (r *appInstanceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {

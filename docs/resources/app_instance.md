@@ -171,16 +171,16 @@ The gateway suffix is shared across every slot in an app, so reading it from any
 ### Required
 
 - `app_id` (String) Phala app identifier (replica set) this instance belongs to.
-- `name` (String) Stable logical member name (5-63 chars, starts with a letter, letters/digits/hyphens only). Immutable; renaming forces replacement.
+- `name` (String) Stable logical member name (5-63 chars, starts with a letter, letters/digits/hyphens only). This is the slot's durable identity: it forms the resource ID (`<app_id>:<name>`), drives adopt-by-name, and is the typical `for_each` key. Renaming forces replacement (a different name is a different slot) — even though the cloud has a CVM-rename endpoint, the Terraform identity can't be mutated in place.
 
 ### Optional
 
-- `compose_hash` (String) Optional explicit compose hash. When omitted the backend resolves it from `docker_compose` (if provided) or the app's current revision. Changing forces replacement.
-- `docker_compose` (String) Optional override Docker Compose YAML for this instance. When omitted, the backend uses the app's template instance. Changing forces replacement.
-- `encrypted_env` (String, Sensitive) Optional hex-encoded encrypted env payload to seed at create time.
-- `env` (Map of String, Sensitive) Plaintext env vars for this instance. Values are encrypted before API submission, but plaintext is stored in Terraform state. Changing forces replacement. The parent app compose must already allow these env keys.
+- `compose_hash` (String) Content-addressed pointer to an existing compose revision of the parent app: deploy the slot from a compose the app already has, without re-uploading the YAML. Mutually exclusive with `docker_compose` (the backend rejects both), and must reference a revision that belongs to this app. When omitted, the backend uses `docker_compose` (if set) or the app's current revision. Selecting a different revision is a new provisioning input, so changing it forces replacement.
+- `docker_compose` (String) Optional override Docker Compose YAML for this instance. When omitted, the backend uses the app's template instance. Updated in place on the slot's CVM (via `PATCH /cvms/{uuid}/docker-compose`); `vm_uuid` is preserved. Only mutable on managed instances; adopted slots reject per-instance overrides.
+- `encrypted_env` (String, Sensitive) Optional hex-encoded pre-encrypted env payload — the manual alternative to `env` (mutually exclusive with it). Updated in place on the slot's CVM via the same `PATCH /cvms/{uuid}/envs` as `env`, preserving `vm_uuid`. Only mutable on managed instances; adopted slots reject per-instance overrides.
+- `env` (Map of String, Sensitive) Plaintext env vars for this instance. Values are encrypted before API submission, but plaintext is stored in Terraform state. Updated in place on the slot's CVM (via `PATCH /cvms/{uuid}/envs`) — the `vm_uuid` is preserved, mirroring `phala_app.env`. The parent app compose must already allow these env keys. Only settable on instances created by this resource (`managed = true`); adopted bootstrap slots reject per-instance env.
 - `node_id` (Number) Optional target node (teepod) ID for placement. Changing this forces replacement.
-- `pre_launch_script` (String) Optional pre-launch script content. Changing forces replacement.
+- `pre_launch_script` (String) Optional pre-launch script content. Updated in place on the slot's CVM (via `PATCH /cvms/{uuid}/pre-launch-script`); `vm_uuid` is preserved. Only mutable on managed instances; adopted slots reject per-instance overrides.
 - `wait_for_ready` (Boolean) Wait until the new instance reports `running` before returning.
 - `wait_timeout_seconds` (Number) Wait timeout for create / wait-for-ready, in seconds.
 
