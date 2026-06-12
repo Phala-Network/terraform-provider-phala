@@ -3,3 +3,9 @@ dist/
 examples/smoke/.terraform/
 examples/smoke/terraform.tfstate
 examples/smoke/terraform.tfstate.*
+e2e_tests/terraforms/**/.terraform/
+e2e_tests/terraforms/**/.terraform.lock.hcl
+e2e_tests/terraforms/**/terraform.tfstate
+e2e_tests/terraforms/**/terraform.tfstate.*
+e2e_tests/terraforms/**/*.tfvars
+e2e_tests/terraforms/**/*.tfvars.json
