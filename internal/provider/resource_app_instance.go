@@ -628,7 +628,7 @@ func (r *appInstanceResource) Delete(ctx context.Context, req resource.DeleteReq
 
 	appID := ensureAppPrefix(strings.TrimSpace(state.AppID.ValueString()))
 	name := strings.TrimSpace(state.Name.ValueString())
-	vmUUID := strings.TrimSpace(state.VMUUID.ValueString())
+	identifier := strings.TrimSpace(state.VMUUID.ValueString())
 
 	// Adopted instances don't own the CVM; the parent phala_app does. Just
 	// drop the binding from Terraform state without touching the cloud.
@@ -636,24 +636,25 @@ func (r *appInstanceResource) Delete(ctx context.Context, req resource.DeleteReq
 		return
 	}
 
-	// Prefer the CVM UUID captured in state. If we don't have one (e.g. partial create),
-	// best-effort: look the CVM up by name in the app.
-	if vmUUID == "" && appID != "" && name != "" {
+	// Resolve the current CVM by slot name before falling back to the stored
+	// vm_uuid. The 2026-05-22 API exposes hashed CVM IDs; resolving by name lets
+	// Delete prefer that ID while still recovering from partial creates.
+	if appID != "" && name != "" {
 		cvms, err := r.fetchAppCVMs(ctx, appID)
 		if err != nil && !isNotFound(err) {
 			resp.Diagnostics.AddError("Failed to resolve app instance for delete", err.Error())
 			return
 		}
 		if match := findInstanceByName(cvms, name); match != nil {
-			vmUUID = selectReplicaIdentifier(*match)
+			identifier = selectReplicaIdentifier(*match)
 		}
 	}
-	if vmUUID == "" {
+	if identifier == "" {
 		// Nothing to delete on the backend; treat as already gone.
 		return
 	}
 
-	if err := r.client.DeleteCVM(ctx, vmUUID); err != nil && !isNotFound(err) {
+	if err := r.client.DeleteCVM(ctx, identifier); err != nil && !isNotFound(err) {
 		summary, detail := diagnosticFromAPIError("Failed to delete app instance", err)
 		resp.Diagnostics.AddError(summary, detail)
 		return

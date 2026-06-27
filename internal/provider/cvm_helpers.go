@@ -107,6 +107,16 @@ func cvmInfoInstanceType(info *phala.CVMInfo) string {
 	return ""
 }
 
+func cvmInfoComposeHash(info *phala.CVMInfo) string {
+	if info.ComposeHash != nil && strings.TrimSpace(*info.ComposeHash) != "" {
+		return strings.TrimSpace(*info.ComposeHash)
+	}
+	if info.DockerComposeHash != nil && strings.TrimSpace(*info.DockerComposeHash) != "" {
+		return strings.TrimSpace(*info.DockerComposeHash)
+	}
+	return ""
+}
+
 func cvmInfoRegion(info *phala.CVMInfo) string {
 	if info.NodeInfo != nil && info.NodeInfo.Region != nil && strings.TrimSpace(*info.NodeInfo.Region) != "" {
 		return *info.NodeInfo.Region

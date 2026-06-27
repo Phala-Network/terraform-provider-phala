@@ -27,7 +27,7 @@ and CLI parity.
 | Request body | `{"name": "<new-name>"}` (RFC 1123 hostname rules; `5..63` chars, leading letter, `[A-Za-z0-9-]`) |
 | Success | `HTTP 204 No Content` (empty body) |
 | Duplicate name | `HTTP 400` with body `{"detail":"CVM name \"<n>\" is already in use in this workspace"}` |
-| Headers | `X-API-Key: phak_...`, `X-Phala-Version: 2026-01-21`. No admin token, no cookies required. |
+| Headers | `X-API-Key: phak_...`, `X-Phala-Version: 2026-05-22`. No admin token, no cookies required. |
 
 ## Atomicity
 
@@ -40,9 +40,8 @@ the `detail` substring.
 ## Gotchas
 
 1. **Identifier type**. The endpoint takes the `cvm_xxx` string ID, not
-   the `vm_uuid`. Most other provider call sites already route through
-   `cvmPath(id)` with `selectReplicaIdentifier(...)` which prefers
-   `vm_uuid`. For rename, fetch and pass `idString()` instead.
+   the `vm_uuid`. Provider call sites route through helpers that prefer
+   the hashed `id` and fall back to `vm_uuid` only for legacy responses.
 
 2. **OpenAPI under-documentation**. The schema only advertises 204 and
    422. The real 400-on-conflict is not in the spec. Provider error
