@@ -7,7 +7,7 @@ DEV_TF_CLI_CONFIG ?= $(DEV_PLUGIN_DIR)/terraformrc
 SMOKE_DIR ?= $(CURDIR)/examples/smoke
 DIST_DIR ?= $(CURDIR)/dist
 VERSION ?= dev
-LDFLAGS ?= -s -w -X main.version=$(VERSION)
+GO_LDFLAGS ?= -s -w -X main.version=$(VERSION)
 
 PHALA_API_KEY ?=
 CREATE_RESOURCES ?= false
@@ -29,12 +29,12 @@ IMAGE ?=
 
 build:
 	@mkdir -p "$(DEV_PLUGIN_DIR)"
-	$(GO) build -ldflags "$(LDFLAGS)" -o "$(DEV_PLUGIN_DIR)/terraform-provider-phala" .
+	$(GO) build -ldflags "$(GO_LDFLAGS)" -o "$(DEV_PLUGIN_DIR)/terraform-provider-phala" .
 	@echo "Built provider binary at $(DEV_PLUGIN_DIR)/terraform-provider-phala"
 
 build-release:
 	@mkdir -p "$(DIST_DIR)"
-	$(GO) build -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/terraform-provider-phala" .
+	$(GO) build -ldflags "$(GO_LDFLAGS)" -o "$(DIST_DIR)/terraform-provider-phala" .
 	@echo "Built release binary at $(DIST_DIR)/terraform-provider-phala (version=$(VERSION))"
 
 fmt:
