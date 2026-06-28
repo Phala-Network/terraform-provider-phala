@@ -290,7 +290,7 @@ func (r *appResource) patchResourcesAcrossCVMs(
 		if id == "" {
 			continue
 		}
-		if err := r.client.UpdateCVMResources(ctx, id, resourceReq); err != nil {
+		if _, err := r.client.UpdateCVMResources(ctx, id, resourceReq); err != nil {
 			return fmt.Errorf("patch resources on CVM %s: %w", id, err)
 		}
 	}
@@ -530,7 +530,7 @@ func (r *appResource) applySingleCVMUpdate(ctx context.Context, a applySingleCVM
 			ds := int(a.plan.DiskSize.ValueInt64())
 			resReq.DiskSize = &ds
 		}
-		if err := r.client.UpdateCVMResources(ctx, a.bootstrapID, resReq); err != nil {
+		if _, err := r.client.UpdateCVMResources(ctx, a.bootstrapID, resReq); err != nil {
 			diags.AddError("Failed to update app resources", err.Error())
 			return diags
 		}
