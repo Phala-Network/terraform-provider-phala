@@ -128,7 +128,9 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 
 ### Read-Only
 
+- `app_env_encrypt_pubkey` (String) Public key used for app environment encryption.
 - `app_id` (String) Phala app identifier.
+- `compose_hash` (String) SHA-256 hash of the normalized app compose file returned by Phala Cloud provision.
 - `cvm_ids` (List of String) Identifiers of every CVM currently attached to this app (bootstrap plus any `phala_app_instance`s).
 - `endpoint` (String) Primary public endpoint URL.
 - `gateway_base_domain` (String) Phala Cloud gateway base domain serving this app (e.g. `dstack-pha-prod5.phala.network`). Compose public URLs as `https://<app_id>-<port>.<gateway_base_domain>` without having to predict the value. Sourced from the cloud's `CVMGatewayInfo.base_domain` on the primary CVM.
@@ -155,6 +157,3 @@ Read-Only:
 - `region` (String)
 - `status` (String)
 - `vm_uuid` (String)
-
-
-
