@@ -29,41 +29,43 @@ type appResource struct {
 }
 
 type appResourceModel struct {
-	ID                 types.String `tfsdk:"id"`
-	AppID              types.String `tfsdk:"app_id"`
-	Name               types.String `tfsdk:"name"`
-	Region             types.String `tfsdk:"region"`
-	Size               types.String `tfsdk:"size"`
-	Image              types.String `tfsdk:"image"`
-	KMS                types.String `tfsdk:"kms"`
-	NodeID             types.Int64  `tfsdk:"node_id"`
-	CustomAppID        types.String `tfsdk:"custom_app_id"`
-	Nonce              types.Int64  `tfsdk:"nonce"`
-	PublicLogs         types.Bool   `tfsdk:"public_logs"`
-	PublicSysinfo      types.Bool   `tfsdk:"public_sysinfo"`
-	PublicTCBInfo      types.Bool   `tfsdk:"public_tcbinfo"`
-	GatewayEnabled     types.Bool   `tfsdk:"gateway_enabled"`
-	SecureTime         types.Bool   `tfsdk:"secure_time"`
-	StorageFS          types.String `tfsdk:"storage_fs"`
-	DiskSize           types.Int64  `tfsdk:"disk_size"`
-	DockerCompose      types.String `tfsdk:"docker_compose"`
-	PreLaunchScript    types.String `tfsdk:"pre_launch_script"`
-	Env                types.Map    `tfsdk:"env"`
-	EncryptedEnv       types.String `tfsdk:"encrypted_env"`
-	EnvKeys            types.List   `tfsdk:"env_keys"`
-	EnvComposeHash     types.String `tfsdk:"env_compose_hash"`
-	EnvTransactionHash types.String `tfsdk:"env_transaction_hash"`
-	Listed             types.Bool   `tfsdk:"listed"`
-	WaitForReady       types.Bool   `tfsdk:"wait_for_ready"`
-	WaitTimeoutSecond  types.Int64  `tfsdk:"wait_timeout_seconds"`
-	Status             types.String `tfsdk:"status"`
-	PrimaryCVMID       types.String `tfsdk:"primary_cvm_id"`
-	CVMIDs             types.List   `tfsdk:"cvm_ids"`
-	Instances          types.List   `tfsdk:"instances"`
-	Endpoint           types.String `tfsdk:"endpoint"`
-	GatewayBaseDomain  types.String `tfsdk:"gateway_base_domain"`
-	GatewayCname       types.String `tfsdk:"gateway_cname"`
-	Members            types.List   `tfsdk:"members"`
+	ID                  types.String `tfsdk:"id"`
+	AppID               types.String `tfsdk:"app_id"`
+	Name                types.String `tfsdk:"name"`
+	Region              types.String `tfsdk:"region"`
+	Size                types.String `tfsdk:"size"`
+	Image               types.String `tfsdk:"image"`
+	KMS                 types.String `tfsdk:"kms"`
+	NodeID              types.Int64  `tfsdk:"node_id"`
+	CustomAppID         types.String `tfsdk:"custom_app_id"`
+	Nonce               types.Int64  `tfsdk:"nonce"`
+	PublicLogs          types.Bool   `tfsdk:"public_logs"`
+	PublicSysinfo       types.Bool   `tfsdk:"public_sysinfo"`
+	PublicTCBInfo       types.Bool   `tfsdk:"public_tcbinfo"`
+	GatewayEnabled      types.Bool   `tfsdk:"gateway_enabled"`
+	SecureTime          types.Bool   `tfsdk:"secure_time"`
+	StorageFS           types.String `tfsdk:"storage_fs"`
+	DiskSize            types.Int64  `tfsdk:"disk_size"`
+	DockerCompose       types.String `tfsdk:"docker_compose"`
+	PreLaunchScript     types.String `tfsdk:"pre_launch_script"`
+	Env                 types.Map    `tfsdk:"env"`
+	EncryptedEnv        types.String `tfsdk:"encrypted_env"`
+	EnvKeys             types.List   `tfsdk:"env_keys"`
+	EnvComposeHash      types.String `tfsdk:"env_compose_hash"`
+	EnvTransactionHash  types.String `tfsdk:"env_transaction_hash"`
+	ComposeHash         types.String `tfsdk:"compose_hash"`
+	AppEnvEncryptPubkey types.String `tfsdk:"app_env_encrypt_pubkey"`
+	Listed              types.Bool   `tfsdk:"listed"`
+	WaitForReady        types.Bool   `tfsdk:"wait_for_ready"`
+	WaitTimeoutSecond   types.Int64  `tfsdk:"wait_timeout_seconds"`
+	Status              types.String `tfsdk:"status"`
+	PrimaryCVMID        types.String `tfsdk:"primary_cvm_id"`
+	CVMIDs              types.List   `tfsdk:"cvm_ids"`
+	Instances           types.List   `tfsdk:"instances"`
+	Endpoint            types.String `tfsdk:"endpoint"`
+	GatewayBaseDomain   types.String `tfsdk:"gateway_base_domain"`
+	GatewayCname        types.String `tfsdk:"gateway_cname"`
+	Members             types.List   `tfsdk:"members"`
 }
 
 type appInstanceModel struct {
@@ -129,6 +131,20 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 	attrs["app_id"] = schema.StringAttribute{
 		Computed:            true,
 		MarkdownDescription: "Phala app identifier.",
+		PlanModifiers: []planmodifier.String{
+			stringplanmodifier.UseStateForUnknown(),
+		},
+	}
+	attrs["compose_hash"] = schema.StringAttribute{
+		Computed:            true,
+		MarkdownDescription: "SHA-256 hash of the normalized app compose file returned by Phala Cloud provision.",
+		PlanModifiers: []planmodifier.String{
+			stringplanmodifier.UseStateForUnknown(),
+		},
+	}
+	attrs["app_env_encrypt_pubkey"] = schema.StringAttribute{
+		Computed:            true,
+		MarkdownDescription: "Public key used for app environment encryption.",
 		PlanModifiers: []planmodifier.String{
 			stringplanmodifier.UseStateForUnknown(),
 		},
@@ -383,6 +399,8 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 
 	plan.ID = types.StringValue(appID)
 	plan.AppID = types.StringValue(appID)
+	plan.ComposeHash = nullableString(provResp.ComposeHash)
+	plan.AppEnvEncryptPubkey = nullableString(provResp.AppEnvEncryptPubkey)
 
 	fetched, err := r.fetchAppAndCVMs(ctx, appID)
 	if err != nil {
@@ -809,12 +827,12 @@ func stoppedReplicaFailure(cvms []phala.CVMInfo) (bool, string) {
 }
 
 func describeReplicaState(cvm *phala.CVMInfo) string {
-	id := cvmInfoVMUUID(cvm)
+	id := cvmInfoIDString(cvm)
 	if id == "" {
-		id = cvmInfoInstanceID(cvm)
+		id = cvmInfoVMUUID(cvm)
 	}
 	if id == "" {
-		id = cvmInfoIDString(cvm)
+		id = cvmInfoInstanceID(cvm)
 	}
 	if id == "" {
 		id = "<unknown>"
@@ -918,6 +936,12 @@ func (r *appResource) populateState(
 		state.Endpoint = nullableString(cvmInfoEndpoint(primary))
 		state.GatewayBaseDomain = nullableString(cvmInfoGatewayBaseDomain(primary))
 		state.GatewayCname = nullableString(cvmInfoGatewayCname(primary))
+		if composeHash := cvmInfoComposeHash(primary); composeHash != "" {
+			state.ComposeHash = types.StringValue(composeHash)
+		}
+		if pubkey := cvmInfoEnvEncryptionPubkey(primary); pubkey != "" {
+			state.AppEnvEncryptPubkey = types.StringValue(pubkey)
+		}
 		// Listed is a bool (not pointer) in the SDK. Only overwrite state when
 		// the API explicitly says true; otherwise keep existing state to avoid
 		// spurious RequiresReplace drift.
@@ -1138,10 +1162,10 @@ func selectPrimaryCVM(cvms []phala.CVMInfo, preferredSourceVMUUID string, prefer
 }
 
 func selectReplicaIdentifier(cvm phala.CVMInfo) string {
-	if v := cvmInfoVMUUID(&cvm); v != "" {
+	if v := cvmInfoIDString(&cvm); v != "" {
 		return v
 	}
-	if v := cvmInfoIDString(&cvm); v != "" {
+	if v := cvmInfoVMUUID(&cvm); v != "" {
 		return v
 	}
 	if v := cvmInfoInstanceID(&cvm); v != "" {
@@ -1221,6 +1245,10 @@ func normalizeCVMInfos(cvms []phala.CVMInfo) []phala.CVMInfo {
 			strings.TrimSpace(cvm.Status) == "" &&
 			strings.TrimSpace(cvm.ID) == "" {
 			continue
+		}
+		if appID := cvmInfoAppID(&cvm); appID != "" {
+			normalized := ensureAppPrefix(appID)
+			cvm.AppID = &normalized
 		}
 		out = append(out, cvm)
 	}

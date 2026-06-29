@@ -13,6 +13,10 @@ repos:
       - id: trailing-whitespace
         exclude: \.(md|mdx)$
       - id: end-of-file-fixer
+        # tfplugindocs emits trailing blank lines and CI verifies the
+        # generated output is byte-for-byte stable (`git diff --exit-code`
+        # after `make generate`). Stripping them locally breaks CI.
+        exclude: ^docs/(resources|data-sources)/.*\.md$
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-json

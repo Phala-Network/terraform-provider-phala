@@ -22,9 +22,10 @@ const (
 	// CommitCVMProvisionResponseV20260522, etc.), which decode `id` as the
 	// "cvm_<hashid>" string. The backend only emits that shape when the
 	// X-Phala-Version header requests it; sending an older version returns
-	// integer ids that fail to decode. Keep this in lockstep with
-	// github.com/Phala-Network/phala-cloud/sdks/go version.DefaultAPIVersion.
-	DefaultAPIVersion = "2026-05-22"
+	// integer ids that fail to decode. Sourcing from
+	// github.com/Phala-Network/phala-cloud/sdks/go's DefaultAPIVersion
+	// guarantees lockstep.
+	DefaultAPIVersion = phala.DefaultAPIVersion
 	DefaultTimeoutSec = 30
 )
 
