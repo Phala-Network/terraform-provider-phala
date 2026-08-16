@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -63,6 +64,13 @@ func TestAppResourceEnvUpdateTriggersEnvsPATCH(t *testing.T) {
 		case r.Method == http.MethodPost && path == "/api/v1/cvms/provision":
 			writeJSON(t, w, http.StatusOK, `{"app_id":"app_test","compose_hash":"abc","app_env_encrypt_pubkey":"`+envUpdateTestPubkey+`"}`)
 		case r.Method == http.MethodPost && path == "/api/v1/cvms":
+			// Same-path two-phase create: prepare carries compose_file, commit does not.
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if _, ok := body["compose_file"]; ok {
+				writeJSON(t, w, http.StatusOK, `{"app_id":"app_test","compose_hash":"abc","app_env_encrypt_pubkey":"`+envUpdateTestPubkey+`","token":"tok_test"}`)
+				return
+			}
 			writeJSON(t, w, http.StatusOK, envUpdateCVMResponse)
 		case r.Method == http.MethodGet && path == "/api/v1/apps/test":
 			writeJSON(t, w, http.StatusOK, `{"app_id":"app_test","name":"demo","cvms":[`+envUpdateCVMResponse+`]}`)

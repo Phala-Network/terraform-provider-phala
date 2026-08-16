@@ -379,6 +379,11 @@ func commitAndCreate(
 		AppID:       provResp.AppID,
 		ComposeHash: provResp.ComposeHash,
 	}
+	// Same-path two-phase create: prefer the one-time commit token when the
+	// backend issued one; app_id + compose_hash remain as the legacy fallback.
+	if provResp.Token != "" {
+		commitReq.Token = &provResp.Token
+	}
 	if hasEncryptedEnv {
 		commitReq.EncryptedEnv = &encryptedEnv
 	}
