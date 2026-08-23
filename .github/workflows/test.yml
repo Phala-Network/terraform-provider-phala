@@ -18,11 +18,22 @@ jobs:
       - terraform-provider-phala
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Resolve Go SDK ref
+        id: sdkref
+        run: |
+          # Stacked PRs may pair this branch with a same-named branch in
+          # Phala-Network/phala-cloud. Use it when it exists; fall back to main.
+          branch="${{ github.head_ref || github.ref_name }}"
+          if git ls-remote --exit-code --heads https://github.com/Phala-Network/phala-cloud.git "$branch" > /dev/null 2>&1; then
+            echo "ref=$branch" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
       - name: Checkout Go SDK (for replace directive ../go)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: Phala-Network/phala-cloud
-          ref: main
+          ref: ${{ steps.sdkref.outputs.ref }}
           path: phala-cloud
           sparse-checkout: go
           sparse-checkout-cone-mode: true
