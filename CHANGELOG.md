@@ -4,6 +4,10 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `phala_app.compose_hash` is now unknown in the plan when a compose input changes. Such applies previously failed with "Provider produced inconsistent result after apply".
+
 ## [0.3.0-beta.4] - 2026-05-31
 
 Migrates the provider onto the official Phala Cloud Go SDK and makes every per-CVM mutable field update **in place** instead of forcing destructive CVM replacement. Previously, editing `env`, `encrypted_env`, `docker_compose`, `pre_launch_script` on a members-mode slot, or toggling `phala_app.listed`, destroyed and recreated the CVM(s) (new `vm_uuid`s, fresh disks) — surfaced by a large-scale e2e stress test. Each now PATCHes the relevant CVM directly and preserves identity. Also removes the inert `ssh_authorized_keys` field (**breaking**) and restores the `storage_fs` plan modifier lost during the SDK migration. All in-place paths were live-verified against real Phala Cloud in a disposable test workspace.

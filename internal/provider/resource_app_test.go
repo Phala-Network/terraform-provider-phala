@@ -11,6 +11,7 @@ import (
 	"time"
 
 	phala "github.com/Phala-Network/phala-cloud/sdks/go"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -761,4 +762,45 @@ func TestComposeEnvKeysFromAttrs(t *testing.T) {
 			t.Fatalf("unexpected env keys: %#v", keys)
 		}
 	})
+}
+
+func TestComposeHashInputsChanged(t *testing.T) {
+	t.Parallel()
+	base := func() appResourceModel {
+		return appResourceModel{
+			DockerCompose:  types.StringValue("services: {}"),
+			Image:          types.StringValue("dstack-0.6.0"),
+			PublicLogs:     types.BoolValue(true),
+			PublicSysinfo:  types.BoolValue(true),
+			PublicTCBInfo:  types.BoolValue(true),
+			GatewayEnabled: types.BoolValue(true),
+			SecureTime:     types.BoolValue(false),
+			EnvKeys:        types.ListValueMust(types.StringType, []attr.Value{types.StringValue("A")}),
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*appResourceModel)
+		changed bool
+	}{
+		{"computed settings unknown", func(m *appResourceModel) {
+			m.PublicLogs = types.BoolUnknown()
+			m.SecureTime = types.BoolUnknown()
+			m.Image = types.StringUnknown()
+		}, false},
+		{"docker compose", func(m *appResourceModel) { m.DockerCompose = types.StringValue("services: {a: {}}") }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			plan := base()
+			tc.mutate(&plan)
+			changed, diags := composeHashInputsChanged(context.Background(), plan, base())
+			if diags.HasError() {
+				t.Fatalf("diags: %v", diags)
+			}
+			if changed != tc.changed {
+				t.Fatalf("changed = %t, want %t", changed, tc.changed)
+			}
+		})
+	}
 }
