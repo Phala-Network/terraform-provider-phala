@@ -280,6 +280,51 @@ func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 				"app instead.",
 		)
 	}
+
+	var plan, state appResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	changed, diags := composeHashInputsChanged(ctx, plan, state)
+	resp.Diagnostics.Append(diags...)
+	if changed {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("compose_hash"), types.StringUnknown())...)
+	}
+}
+
+// composeHashInputsChanged reports whether the plan changes an input of the
+// compose hash. The backend computes the hash, so it is unknown until apply.
+// Unset computed values keep their state values, as in Update.
+func composeHashInputsChanged(ctx context.Context, plan, state appResourceModel) (bool, diag.Diagnostics) {
+	planSettings := composeSettingsValues{
+		inheritOptionalBool(plan.PublicLogs, state.PublicLogs),
+		inheritOptionalBool(plan.PublicSysinfo, state.PublicSysinfo),
+		inheritOptionalBool(plan.PublicTCBInfo, state.PublicTCBInfo),
+		inheritOptionalBool(plan.GatewayEnabled, state.GatewayEnabled),
+		inheritOptionalBool(plan.SecureTime, state.SecureTime),
+	}
+	stateSettings := composeSettingsValues{state.PublicLogs, state.PublicSysinfo, state.PublicTCBInfo, state.GatewayEnabled, state.SecureTime}
+	if planSettings.changed(stateSettings) ||
+		!plan.DockerCompose.Equal(state.DockerCompose) ||
+		!plan.PreLaunchScript.Equal(state.PreLaunchScript) ||
+		!inheritOptionalString(plan.Image, state.Image).Equal(state.Image) {
+		return true, nil
+	}
+
+	var diags diag.Diagnostics
+	planKeys, planKeysKnown, keyDiags := composeEnvKeysFromAttrs(ctx, plan.Env, plan.EnvKeys)
+	diags.Append(keyDiags...)
+	stateKeys, _, keyDiags := composeEnvKeysFromAttrs(ctx, state.Env, state.EnvKeys)
+	diags.Append(keyDiags...)
+	if diags.HasError() {
+		return false, diags
+	}
+	if plan.Env.IsUnknown() || plan.EnvKeys.IsUnknown() {
+		return true, diags
+	}
+	return planKeysKnown && !equalStringSlices(planKeys, stateKeys), diags
 }
 
 func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
