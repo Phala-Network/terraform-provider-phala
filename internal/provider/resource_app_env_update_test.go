@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -60,10 +61,18 @@ func TestAppResourceEnvUpdateTriggersEnvsPATCH(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch {
-		case r.Method == http.MethodPost && path == "/api/v1/cvms/provision":
-			writeJSON(t, w, http.StatusOK, `{"app_id":"app_test","compose_hash":"abc","app_env_encrypt_pubkey":"`+envUpdateTestPubkey+`"}`)
 		case r.Method == http.MethodPost && path == "/api/v1/cvms":
-			writeJSON(t, w, http.StatusOK, envUpdateCVMResponse)
+			var payload map[string]json.RawMessage
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode CVM request: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if _, preparing := payload["compose_file"]; preparing {
+				writeJSON(t, w, http.StatusOK, `{"app_id":"app_test","compose_hash":"abc","app_env_encrypt_pubkey":"`+envUpdateTestPubkey+`"}`)
+			} else {
+				writeJSON(t, w, http.StatusOK, envUpdateCVMResponse)
+			}
 		case r.Method == http.MethodGet && path == "/api/v1/apps/test":
 			writeJSON(t, w, http.StatusOK, `{"app_id":"app_test","name":"demo","cvms":[`+envUpdateCVMResponse+`]}`)
 		case r.Method == http.MethodGet && path == "/api/v1/apps/test/cvms":

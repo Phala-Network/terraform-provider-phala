@@ -6,7 +6,7 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ### Fixed
 
-- `phala_app.compose_hash` is now unknown in the plan when a compose input changes. Such applies previously failed with "Provider produced inconsistent result after apply".
+- `phala_app.compose_hash` is now unknown in the plan when a compose input changes or its configured value is unknown. Env value changes preserve the hash when the key set is unchanged. Such applies previously failed with "Provider produced inconsistent result after apply".
 
 ## [0.3.0-beta.4] - 2026-05-31
 

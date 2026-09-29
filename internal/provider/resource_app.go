@@ -235,16 +235,8 @@ func (r *appResource) ValidateConfig(ctx context.Context, req resource.ValidateC
 	resp.Diagnostics.Append(validateMembersAndName(ctx, cfg)...)
 }
 
-// ModifyPlan blocks mutable cloud-side updates to phala_app in members
-// (MIG) mode. The provider's existing app-update path mutates one CVM at
-// a time (the bootstrap), so we cannot safely propagate mutations across
-// named slots. Until the cloud exposes an app-revision-aware update
-// endpoint that preserves named slot identity, the safe answer is: refuse
-// the plan rather than apply it half-way.
-//
-// We read individual attributes (not the whole struct) so this works on
-// fresh-Create plans too, where Computed nested fields are still Unknown
-// and would fail whole-struct deserialization.
+// ModifyPlan protects members-mode ownership and invalidates compose_hash
+// when a measured input changes or is explicitly unknown in configuration.
 func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	// Skip on create (no prior state) and destroy (no plan).
 	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
@@ -281,13 +273,14 @@ func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 		)
 	}
 
-	var plan, state appResourceModel
+	var plan, state, config appResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	changed, diags := composeHashInputsChanged(ctx, plan, state)
+	changed, diags := composeHashInputsChanged(ctx, plan, state, config)
 	resp.Diagnostics.Append(diags...)
 	if changed {
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("compose_hash"), types.StringUnknown())...)
@@ -297,7 +290,14 @@ func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 // composeHashInputsChanged reports whether the plan changes an input of the
 // compose hash. The backend computes the hash, so it is unknown until apply.
 // Unset computed values keep their state values, as in Update.
-func composeHashInputsChanged(ctx context.Context, plan, state appResourceModel) (bool, diag.Diagnostics) {
+func composeHashInputsChanged(ctx context.Context, plan, state, config appResourceModel) (bool, diag.Diagnostics) {
+	// Optional computed inputs omitted from configuration inherit state. An
+	// explicitly configured unknown input can resolve differently at apply.
+	if config.Image.IsUnknown() || config.PublicLogs.IsUnknown() ||
+		config.PublicSysinfo.IsUnknown() || config.PublicTCBInfo.IsUnknown() ||
+		config.GatewayEnabled.IsUnknown() || config.SecureTime.IsUnknown() {
+		return true, nil
+	}
 	planSettings := composeSettingsValues{
 		inheritOptionalBool(plan.PublicLogs, state.PublicLogs),
 		inheritOptionalBool(plan.PublicSysinfo, state.PublicSysinfo),
@@ -321,7 +321,7 @@ func composeHashInputsChanged(ctx context.Context, plan, state appResourceModel)
 	if diags.HasError() {
 		return false, diags
 	}
-	if plan.Env.IsUnknown() || plan.EnvKeys.IsUnknown() {
+	if !planKeysKnown && (!plan.Env.IsNull() || !plan.EnvKeys.IsNull()) {
 		return true, diags
 	}
 	return planKeysKnown && !equalStringSlices(planKeys, stateKeys), diags
