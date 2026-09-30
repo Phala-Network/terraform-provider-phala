@@ -11,6 +11,7 @@ import (
 	"time"
 
 	phala "github.com/Phala-Network/phala-cloud/sdks/go"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -761,4 +762,80 @@ func TestComposeEnvKeysFromAttrs(t *testing.T) {
 			t.Fatalf("unexpected env keys: %#v", keys)
 		}
 	})
+}
+
+func TestComposeHashInputsChanged(t *testing.T) {
+	t.Parallel()
+	base := func() appResourceModel {
+		return appResourceModel{
+			DockerCompose:  types.StringValue("services: {}"),
+			Image:          types.StringValue("dstack-0.6.0"),
+			PublicLogs:     types.BoolValue(true),
+			PublicSysinfo:  types.BoolValue(true),
+			PublicTCBInfo:  types.BoolValue(true),
+			GatewayEnabled: types.BoolValue(true),
+			SecureTime:     types.BoolValue(false),
+			EnvKeys:        types.ListValueMust(types.StringType, []attr.Value{types.StringValue("A")}),
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*appResourceModel)
+		config  func(*appResourceModel)
+		changed bool
+	}{
+		{"computed settings unknown", func(m *appResourceModel) {
+			m.PublicLogs = types.BoolUnknown()
+			m.SecureTime = types.BoolUnknown()
+			m.Image = types.StringUnknown()
+		}, func(m *appResourceModel) {
+			m.PublicLogs = types.BoolNull()
+			m.SecureTime = types.BoolNull()
+			m.Image = types.StringNull()
+		}, false},
+		{"configured image unknown", func(m *appResourceModel) { m.Image = types.StringUnknown() }, nil, true},
+		{"configured setting unknown", func(m *appResourceModel) { m.PublicLogs = types.BoolUnknown() }, nil, true},
+		{"docker compose", func(m *appResourceModel) { m.DockerCompose = types.StringValue("services: {a: {}}") }, nil, true},
+		{"pre-launch script", func(m *appResourceModel) { m.PreLaunchScript = types.StringValue("echo boot") }, nil, true},
+		{"os image", func(m *appResourceModel) { m.Image = types.StringValue("dstack-0.7.0") }, nil, true},
+		{"public logs", func(m *appResourceModel) { m.PublicLogs = types.BoolValue(false) }, nil, true},
+		{"public sysinfo", func(m *appResourceModel) { m.PublicSysinfo = types.BoolValue(false) }, nil, true},
+		{"public tcbinfo", func(m *appResourceModel) { m.PublicTCBInfo = types.BoolValue(false) }, nil, true},
+		{"gateway", func(m *appResourceModel) { m.GatewayEnabled = types.BoolValue(false) }, nil, true},
+		{"secure time", func(m *appResourceModel) { m.SecureTime = types.BoolValue(true) }, nil, true},
+		{"new env key", func(m *appResourceModel) {
+			m.Env = types.MapValueMust(types.StringType, map[string]attr.Value{"B": types.StringUnknown()})
+		}, nil, true},
+		{"unknown env value with unchanged keys", func(m *appResourceModel) {
+			m.Env = types.MapValueMust(types.StringType, map[string]attr.Value{"A": types.StringUnknown()})
+		}, nil, false},
+		{"unknown env map takes precedence over manual keys", func(m *appResourceModel) {
+			m.Env = types.MapUnknown(types.StringType)
+		}, nil, true},
+		{"unknown manual key", func(m *appResourceModel) {
+			m.EnvKeys = types.ListValueMust(types.StringType, []attr.Value{types.StringUnknown()})
+		}, nil, true},
+		{"empty allowlist", func(m *appResourceModel) {
+			m.EnvKeys = types.ListValueMust(types.StringType, []attr.Value{})
+		}, nil, true},
+		{"ciphertext only", func(m *appResourceModel) { m.EncryptedEnv = types.StringValue("deadbeef") }, nil, false},
+		{"placement only", func(m *appResourceModel) { m.Size = types.StringValue("tdx.large") }, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			plan := base()
+			tc.mutate(&plan)
+			config := plan
+			if tc.config != nil {
+				tc.config(&config)
+			}
+			changed, diags := composeHashInputsChanged(context.Background(), plan, base(), config)
+			if diags.HasError() {
+				t.Fatalf("diags: %v", diags)
+			}
+			if changed != tc.changed {
+				t.Fatalf("changed = %t, want %t", changed, tc.changed)
+			}
+		})
+	}
 }

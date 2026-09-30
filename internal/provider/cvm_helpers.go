@@ -640,15 +640,26 @@ func composeEnvKeysFromAttrs(ctx context.Context, env types.Map, envKeys types.L
 	var diags diag.Diagnostics
 
 	if !env.IsNull() && !env.IsUnknown() {
-		envMap, mapDiags := mapValueAsStrings(ctx, env, "env")
-		diags.Append(mapDiags...)
-		if diags.HasError() {
-			return nil, false, diags
+		// Values can be unknown during planning without changing the known
+		// key set. Only keys are part of the measured compose allowlist.
+		keys := make([]string, 0, len(env.Elements()))
+		for key := range env.Elements() {
+			keys = append(keys, key)
 		}
-		return sortedEnvKeys(envMap), true, diags
+		sort.Strings(keys)
+		return keys, true, diags
+	}
+
+	if env.IsUnknown() {
+		return nil, false, diags
 	}
 
 	if !envKeys.IsNull() && !envKeys.IsUnknown() {
+		for _, key := range envKeys.Elements() {
+			if key.IsUnknown() {
+				return nil, false, diags
+			}
+		}
 		keys, listDiags := listValueAsStrings(ctx, envKeys, "env_keys")
 		diags.Append(listDiags...)
 		if diags.HasError() {
