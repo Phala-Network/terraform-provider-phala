@@ -13,11 +13,9 @@ cloud inventory synchronization. Enabling `wait_for_ready` later waits without
 restarting the CVM. Use `env_update_scope = "bootstrap"` on the parent when
 instance resources own the other slots' environments.
 
-When values refer to the instances being allocated, declare `env_keys`
-without inline `env` on the app, allocate slots with `wait_for_ready = false`
-and `wait_for_identity = true`, then use one [`phala_cvm_env`](docs/resources/cvm_env.md)
-per CVM. Terraform derives the allocation-to-configuration dependencies in
-one apply; no targeted applies or generated variable files are needed.
+Use [`phala_cvm_env`](docs/resources/cvm_env.md) when values reference newly
+allocated instance identities. Its example separates allocation from values
+in one apply, without targeting or generated variable files.
 
 ## Before You Start
 

@@ -41,12 +41,7 @@ func (r *cvmEnvResource) Metadata(_ context.Context, req resource.MetadataReques
 
 func (r *cvmEnvResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages the complete environment value map of an existing CVM separately from its allocation. " +
-			"Declare allowed keys with phala_app.env_keys and omit env/encrypted_env on the app and instance resources. " +
-			"Values can then reference allocated instance identities without a Terraform dependency cycle. " +
-			"This resource never changes the measured key allowlist or compose revision. " +
-			"Cloud does not expose plaintext values for drift detection. Destroy only releases Terraform ownership; " +
-			"it does not erase the CVM environment or delete/restart the CVM. Set env = {} explicitly to clear values.",
+		MarkdownDescription: "Manages an existing CVM's environment values separately from allocation, without changing the measured key allowlist or compose revision.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{Computed: true, MarkdownDescription: "Environment resource ID, equal to cvm_id."},
 			"cvm_id": schema.StringAttribute{
@@ -55,7 +50,7 @@ func (r *cvmEnvResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			},
 			"env": schema.MapAttribute{
 				Required: true, Sensitive: true, ElementType: types.StringType,
-				MarkdownDescription: "Complete plaintext environment map. Encrypted before API submission, but stored in Terraform state. All keys must already be allowed by the measured app compose. Do not manage the same CVM's values in another resource.",
+				MarkdownDescription: "Complete environment map. Keys must already be allowed by the measured app compose. Encrypted before submission; plaintext remains in Terraform state.",
 			},
 			"wait_for_ready": schema.BoolAttribute{
 				Optional: true, Computed: true, Default: booldefault.StaticBool(true),

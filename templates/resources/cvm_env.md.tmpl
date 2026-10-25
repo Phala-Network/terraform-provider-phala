@@ -15,35 +15,28 @@ description: |-
 
 ## Ownership and lifecycle
 
-`phala_app.env_keys` owns the measured allowlist; `phala_cvm_env.env` owns
-the complete value map. Omit `env` and `encrypted_env` on the allocation
-resources, including the adopted bootstrap slot. Never declare two value
-owners for one CVM. Changing allowlisted keys remains a measured app-compose
-change, with the normal KMS and revision-rollout requirements.
+Declare measured keys with `phala_app.env_keys`; omit `env` and `encrypted_env`
+on app/instance resources, including the adopted bootstrap slot. Each CVM
+must have one value owner. Changing allowed keys remains a measured compose
+change subject to KMS and revision-rollout requirements.
 
-The provider waits for any existing Cloud operation to finish, validates
-every key against the current allowlist, encrypts values using the CVM's
-environment public key, and submits a value-only update. It never writes
-`env_keys` or reconstructs the compose manifest. Optional readiness waits
-for a running CVM with no operation in progress, not application health.
-Independent CVM resources run concurrently under Terraform's parallelism.
+Updates wait for the target's existing operation, validate keys, and encrypt
+values with its environment public key. They never write `env_keys` or
+reconstruct the manifest. Independent targets update concurrently; readiness
+means a running CVM with no pending operation, not application health.
 
-Plaintext exists in Terraform state. Protect the state backend. Cloud does
-not expose plaintext for readback, so this resource cannot detect external
-value edits. It does detect a deleted CVM; changing `cvm_id` replaces only
-the environment binding, not the CVM.
+Protect Terraform state: it contains plaintext values. Cloud does not expose
+plaintext readback, so external value edits cannot be detected.
 
-Destroying this resource releases ownership without clearing values or
-restarting/deleting the CVM. To clear values on a retained CVM, apply
-`env = {}` before removing the binding.
+Destroy releases ownership without clearing values or restarting/deleting
+the CVM. Apply `env = {}` to clear retained values. Changing `cvm_id` replaces
+only the environment binding.
 
 ## Migration from inline values
 
-In one configuration change, replace the app's inline `env` with the same
-explicit `env_keys`, remove per-instance inline values, and add environment
-resources for every retained CVM. Keep app/slot addresses and placement
-unchanged. The allocation resources relinquish value ownership without
-erasing the existing payload; the new resources configure it in place.
-Review the plan to confirm no CVM replacements are proposed.
+Replace inline values with the same explicit app `env_keys` and one
+`phala_cvm_env` per retained CVM. Omission relinquishes inline ownership
+without erasing values. Keep resource addresses and placement unchanged;
+review the plan to confirm no CVM replacements.
 
 {{ .SchemaMarkdown }}
