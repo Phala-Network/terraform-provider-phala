@@ -128,7 +128,13 @@ func (p *phalaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		}
 	}
 
+	providerHTTPClient, err := newProviderHTTPClient(apiPrefix, apiKey)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid API request rate", err.Error())
+		return
+	}
 	client, err := phala.NewClient(
+		phala.WithHTTPClient(providerHTTPClient),
 		phala.WithBaseURL(apiPrefix),
 		phala.WithAPIKey(apiKey),
 		phala.WithAPIVersion(apiVersion),

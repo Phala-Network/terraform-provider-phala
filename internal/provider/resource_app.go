@@ -49,6 +49,7 @@ type appResourceModel struct {
 	DockerCompose       types.String `tfsdk:"docker_compose"`
 	PreLaunchScript     types.String `tfsdk:"pre_launch_script"`
 	Env                 types.Map    `tfsdk:"env"`
+	EnvUpdateScope      types.String `tfsdk:"env_update_scope"`
 	EncryptedEnv        types.String `tfsdk:"encrypted_env"`
 	EnvKeys             types.List   `tfsdk:"env_keys"`
 	EnvComposeHash      types.String `tfsdk:"env_compose_hash"`
@@ -120,7 +121,18 @@ func (r *appResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 
 func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	attrs := sharedCVMSchemaAttrs()
+	// Status can change when readiness is enabled after asynchronous creation.
+	attrs["status"] = schema.StringAttribute{
+		Computed:            true,
+		MarkdownDescription: "Current CVM status.",
+	}
 	// App-specific overrides and additions.
+	attrs["env_update_scope"] = schema.StringAttribute{
+		Optional: true,
+		MarkdownDescription: "Target of environment value updates: `all` (default) or `bootstrap`. " +
+			"Use `bootstrap` when phala_app_instance resources own per-slot environments; " +
+			"the parent then updates only its own bootstrap CVM. This does not change compose revision rollout scope.",
+	}
 	attrs["id"] = schema.StringAttribute{
 		Computed:            true,
 		MarkdownDescription: "Terraform ID (same as app_id).",
@@ -153,7 +165,7 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 		Computed: true,
 		MarkdownDescription: "Bootstrap CVM identifier — the CVM created by `phala_app` itself, which " +
 			"in members (MIG) mode is also the slot whose name equals `phala_app.name`. " +
-			"This is the only CVM that `phala_app` mutates directly.",
+			"Use env_update_scope to select the target scope of environment value updates.",
 	}
 	attrs["cvm_ids"] = schema.ListAttribute{
 		Computed:            true,
@@ -233,6 +245,7 @@ func (r *appResource) ValidateConfig(ctx context.Context, req resource.ValidateC
 		return
 	}
 	resp.Diagnostics.Append(validateMembersAndName(ctx, cfg)...)
+	resp.Diagnostics.Append(validateAppEnvUpdateScope(cfg.EnvUpdateScope)...)
 }
 
 // ModifyPlan protects members-mode ownership and invalidates compose_hash
@@ -335,6 +348,7 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 	}
 
 	resp.Diagnostics.Append(validateMembersAndName(ctx, plan)...)
+	resp.Diagnostics.Append(validateAppEnvUpdateScope(plan.EnvUpdateScope)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}

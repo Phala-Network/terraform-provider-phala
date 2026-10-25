@@ -66,6 +66,12 @@ export PHALA_CLOUD_API_KEY="phak_xxx"
 
 The provider uses the public Phala Cloud API by default. Most users do not need to set `api_prefix`.
 
+API request starts are paced at 180/minute per key and base URL within the
+provider process. Aliases share that budget; responses and CVM boots remain
+concurrent. Set `PHALA_CLOUD_REQUESTS_PER_MINUTE` to another positive limit
+for your quota or to leave capacity for other tools. The cloud's hourly quota
+and requests made by other processes still apply.
+
 ## Common Workflow
 
 1. Use data sources such as `phala_images`, `phala_sizes`, and `phala_regions` to discover valid inputs.
@@ -92,5 +98,4 @@ The provider uses the public Phala Cloud API by default. Most users do not need 
 - `api_prefix` (String) Phala Cloud API base URL. Can also be set by PHALA_CLOUD_API_PREFIX.
 - `api_version` (String) Phala API version sent in X-Phala-Version header.
 - `timeout_seconds` (Number) HTTP timeout in seconds.
-
 

@@ -4,7 +4,17 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `phala_app_instance.wait_for_identity` waits for an instance-pinned endpoint identity without waiting for the full CVM boot, allowing dependent CVMs to launch concurrently.
+
+- Pace API request starts at 180/minute by default, sharing a budget between provider aliases using one API key and base URL. `PHALA_CLOUD_REQUESTS_PER_MINUTE` changes the budget without serializing CVM boot operations.
+
+- `phala_app.env_update_scope = "bootstrap"` limits environment value updates to the parent-owned bootstrap CVM when instance resources manage per-slot environments. Omission retains the existing all-instance update behavior; compose revisions still roll out app-wide.
+
 ### Fixed
+
+- Enabling `phala_app_instance.wait_for_ready` after an asynchronous create now waits for readiness without modifying or restarting the CVM, including adopted bootstrap slots.
 
 - `phala_app.compose_hash` is now unknown in the plan when a compose input changes or its configured value is unknown. Env value changes preserve the hash when the key set is unchanged. Such applies previously failed with "Provider produced inconsistent result after apply".
 

@@ -9,6 +9,8 @@ import (
 
 	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 // This file implements the slot-preserving update path for phala_app
@@ -353,6 +355,14 @@ type applySingleCVMArgs struct {
 // atomically; env value / image / resource changes fan out per-CVM.
 func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembersModeArgs) diag.Diagnostics {
 	var diags diag.Diagnostics
+	diags.Append(validateAppEnvUpdateScope(a.plan.EnvUpdateScope)...)
+	if a.plan.EnvUpdateScope.IsUnknown() {
+		diags.AddAttributeError(path.Root("env_update_scope"), "Unknown environment update scope",
+			"env_update_scope must be known before updating an app.")
+	}
+	if diags.HasError() {
+		return diags
+	}
 	if len(a.vmUUIDs) == 0 {
 		diags.AddError("No CVMs to update", "members mode update path requires at least one CVM under the app.")
 		return diags
@@ -456,7 +466,15 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 			return diags
 		}
 		envReq := buildUpdateEnvsRequest(envPayload)
-		if err := r.patchEnvAcrossCVMs(ctx, a.vmUUIDs, envReq); err != nil {
+		targets := a.vmUUIDs
+		if a.plan.EnvUpdateScope.ValueString() == "bootstrap" {
+			if strings.TrimSpace(a.bootstrapID) == "" {
+				diags.AddError("Missing bootstrap CVM", "Cannot update bootstrap environment without its CVM identifier.")
+				return diags
+			}
+			targets = []string{a.bootstrapID}
+		}
+		if err := r.patchEnvAcrossCVMs(ctx, targets, envReq); err != nil {
 			diags.AddError("Failed to update app encrypted env", err.Error())
 			return diags
 		}
@@ -496,6 +514,18 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 		}
 	}
 
+	return diags
+}
+
+func validateAppEnvUpdateScope(scope types.String) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if scope.IsNull() || scope.IsUnknown() {
+		return diags
+	}
+	if scope.ValueString() != "all" && scope.ValueString() != "bootstrap" {
+		diags.AddAttributeError(path.Root("env_update_scope"), "Invalid environment update scope",
+			"env_update_scope must be all or bootstrap.")
+	}
 	return diags
 }
 
