@@ -181,7 +181,7 @@ The gateway suffix is shared across every slot in an app, so reading it from any
 - `env` (Map of String, Sensitive) Plaintext env vars for this instance. Values are encrypted before API submission, but plaintext is stored in Terraform state. Updated in place on the slot's CVM (via `PATCH /cvms/{uuid}/envs`) — the `vm_uuid` is preserved, mirroring `phala_app.env`. The parent app compose must already allow these env keys. Only settable on instances created by this resource (`managed = true`); adopted bootstrap slots reject per-instance env.
 - `node_id` (Number) Optional target node (teepod) ID for placement. Changing this forces replacement.
 - `pre_launch_script` (String) Optional pre-launch script content. Updated in place on the slot's CVM (via `PATCH /cvms/{uuid}/pre-launch-script`); `vm_uuid` is preserved. Only mutable on managed instances; adopted slots reject per-instance overrides.
-- `wait_for_identity` (Boolean) Wait for a non-empty `instance_id` without requiring `running`. Defaults to false. Enable it when downstream resources need instance-pinned endpoints during asynchronous boot.
+- `wait_for_identity` (Boolean) Wait for a non-empty instance_id without requiring the CVM to be running. Use this when dependent resources need an instance-pinned endpoint during asynchronous boot.
 - `wait_for_ready` (Boolean) Wait until the instance reports `running` before create or update returns. Enabling this after an asynchronous create waits without restarting the CVM.
 - `wait_timeout_seconds` (Number) Wait timeout for create / wait-for-ready, in seconds.
 
@@ -198,3 +198,5 @@ The gateway suffix is shared across every slot in an app, so reading it from any
 - `region` (String) Region of the CVM currently occupying this slot.
 - `status` (String) Current CVM status.
 - `vm_uuid` (String) Current CVM UUID occupying this slot. Changes when the CVM is replaced.
+
+

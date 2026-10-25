@@ -14,6 +14,8 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ### Fixed
 
+- Include request-pacing dependency checksums and preserve parallel-deployment documentation through regeneration, so standalone builds and CI pass without a local Go workspace.
+
 - Enabling `phala_app_instance.wait_for_ready` after an asynchronous create now waits for readiness without modifying or restarting the CVM, including adopted bootstrap slots.
 
 - `phala_app.compose_hash` is now unknown in the plan when a compose input changes or its configured value is unknown. Env value changes preserve the hash when the key set is unchanged. Such applies previously failed with "Provider produced inconsistent result after apply".
