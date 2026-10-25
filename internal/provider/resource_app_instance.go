@@ -44,6 +44,7 @@ type appInstanceResourceModel struct {
 	EncryptedEnv      types.String `tfsdk:"encrypted_env"`
 	ComposeHash       types.String `tfsdk:"compose_hash"`
 	WaitForReady      types.Bool   `tfsdk:"wait_for_ready"`
+	WaitForIdentity   types.Bool   `tfsdk:"wait_for_identity"`
 	WaitTimeoutSecond types.Int64  `tfsdk:"wait_timeout_seconds"`
 	VMUUID            types.String `tfsdk:"vm_uuid"`
 	InstanceID        types.String `tfsdk:"instance_id"`
@@ -152,10 +153,16 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Optional:            true,
 				Computed:            true,
 				Default:             booldefault.StaticBool(true),
-				MarkdownDescription: "Wait until the new instance reports `running` before returning.",
+				MarkdownDescription: "Wait until the instance reports `running` before create or update returns. Enabling this after an asynchronous create waits without restarting the CVM.",
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.UseStateForUnknown(),
 				},
+			},
+			"wait_for_identity": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+				MarkdownDescription: "Wait for a non-empty instance_id without requiring the CVM to be running. Use this when dependent resources need an instance-pinned endpoint during asynchronous boot.",
 			},
 			"wait_timeout_seconds": schema.Int64Attribute{
 				Optional:            true,
@@ -183,9 +190,6 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"status": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Current CVM status.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"region": schema.StringAttribute{
 				Computed:            true,
@@ -324,8 +328,8 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 			return
 		}
 		merged := existing
-		if shouldWait(plan.WaitForReady) {
-			ready, err := r.waitForInstanceRunning(ctx, appID, name, deadline)
+		if shouldWait(plan.WaitForReady) || plan.WaitForIdentity.ValueBool() {
+			ready, err := r.waitForInstanceState(ctx, appID, name, deadline, plan.WaitForIdentity.ValueBool(), shouldWait(plan.WaitForReady))
 			if err != nil {
 				resp.Diagnostics.AddError("Adopted instance did not become ready", err.Error())
 				return
@@ -409,8 +413,8 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 	}
 	merged := mergeCVMResponse(*created, resolved)
 
-	if shouldWait(plan.WaitForReady) {
-		ready, err := r.waitForInstanceRunning(ctx, appID, name, deadline)
+	if shouldWait(plan.WaitForReady) || plan.WaitForIdentity.ValueBool() {
+		ready, err := r.waitForInstanceState(ctx, appID, name, deadline, plan.WaitForIdentity.ValueBool(), shouldWait(plan.WaitForReady))
 		if err != nil {
 			resp.Diagnostics.AddError("Instance did not become ready", err.Error())
 			return
@@ -451,6 +455,12 @@ func (r *appInstanceResource) Read(ctx context.Context, req resource.ReadRequest
 	if match == nil {
 		resp.State.RemoveResource(ctx)
 		return
+	}
+	if state.WaitForIdentity.ValueBool() && strings.TrimSpace(cvmInfoInstanceID(match)) == "" {
+		if err := r.resolveInstanceIdentity(ctx, match); err != nil {
+			resp.Diagnostics.AddError("Failed to read instance identity", err.Error())
+			return
+		}
 	}
 
 	populateAppInstanceState(&state, appID, name, *match)
@@ -493,10 +503,22 @@ func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateReq
 	envChanged := !plan.Env.Equal(state.Env) || !plan.EncryptedEnv.Equal(state.EncryptedEnv)
 	composeChanged := !plan.DockerCompose.Equal(state.DockerCompose)
 	preLaunchChanged := !plan.PreLaunchScript.Equal(state.PreLaunchScript)
+	appID := ensureAppPrefix(strings.TrimSpace(plan.AppID.ValueString()))
 
 	if !envChanged && !composeChanged && !preLaunchChanged {
 		// Only wait_for_ready / wait_timeout_seconds changed — provider-side
-		// polling knobs with no cloud effect. Accept into state, no API call.
+		// polling knobs with no cloud mutation. Enabling readiness after an
+		// asynchronous create must actually wait, including adopted slots.
+		if shouldWait(plan.WaitForReady) || plan.WaitForIdentity.ValueBool() {
+			deadline := time.Now().Add(waitTimeout(plan.WaitTimeoutSecond))
+			ready, err := r.waitForInstanceState(ctx, appID, strings.TrimSpace(plan.Name.ValueString()), deadline, plan.WaitForIdentity.ValueBool(), shouldWait(plan.WaitForReady))
+			if err != nil {
+				resp.Diagnostics.AddError("Instance did not become ready", err.Error())
+				return
+			}
+			populateAppInstanceState(&plan, appID, strings.TrimSpace(plan.Name.ValueString()), ready)
+			plan.Managed = state.Managed
+		}
 		resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 		return
 	}
@@ -515,7 +537,6 @@ func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateReq
 		return
 	}
 
-	appID := ensureAppPrefix(strings.TrimSpace(plan.AppID.ValueString()))
 	cvmID := strings.TrimSpace(state.VMUUID.ValueString())
 	if cvmID == "" {
 		resp.Diagnostics.AddError("Missing CVM identity", "State has no vm_uuid for this instance; cannot target the in-place update.")
@@ -595,9 +616,9 @@ func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateReq
 	// PATCHes do not change vm_uuid/name, so identity is preserved. Re-read is
 	// best-effort: on failure we keep the carried-over state values.
 	name := strings.TrimSpace(plan.Name.ValueString())
-	if shouldWait(plan.WaitForReady) {
+	if shouldWait(plan.WaitForReady) || plan.WaitForIdentity.ValueBool() {
 		deadline := time.Now().Add(waitTimeout(plan.WaitTimeoutSecond))
-		if _, err := r.waitForInstanceRunning(ctx, appID, name, deadline); err != nil {
+		if _, err := r.waitForInstanceState(ctx, appID, name, deadline, plan.WaitForIdentity.ValueBool(), shouldWait(plan.WaitForReady)); err != nil {
 			resp.Diagnostics.AddError("Instance did not return to ready after env update", err.Error())
 			return
 		}
@@ -778,13 +799,27 @@ func (r *appInstanceResource) waitForInstance(ctx context.Context, appID, name s
 }
 
 func (r *appInstanceResource) waitForInstanceRunning(ctx context.Context, appID, name string, deadline time.Time) (phala.CVMInfo, error) {
+	return r.waitForInstanceState(ctx, appID, name, deadline, false, true)
+}
+
+func (r *appInstanceResource) waitForInstanceState(ctx context.Context, appID, name string, deadline time.Time, identity, running bool) (phala.CVMInfo, error) {
 	for {
 		cvms, err := r.fetchAppCVMs(ctx, appID)
 		if err != nil && !isRetryable(err) && !isNotFound(err) {
 			return phala.CVMInfo{}, err
 		}
 		if match := findInstanceByName(cvms, name); match != nil {
-			if strings.EqualFold(strings.TrimSpace(match.Status), "running") && !cvmInfoInProgress(match) {
+			if identity && strings.TrimSpace(cvmInfoInstanceID(match)) == "" {
+				// App inventory is a database projection. Query the authoritative
+				// host state for a missing identity instead of waiting for the
+				// inventory synchronization job or full CVM readiness.
+				if err := r.resolveInstanceIdentity(ctx, match); err != nil && !isRetryable(err) && !isNotFound(err) {
+					return phala.CVMInfo{}, err
+				}
+			}
+			identityReady := !identity || strings.TrimSpace(cvmInfoInstanceID(match)) != ""
+			runningReady := !running || (strings.EqualFold(strings.TrimSpace(match.Status), "running") && !cvmInfoInProgress(match))
+			if identityReady && runningReady {
 				return *match, nil
 			}
 			if stablePowerState(match.Status) == "stopped" && !cvmInfoInProgress(match) {
@@ -792,7 +827,7 @@ func (r *appInstanceResource) waitForInstanceRunning(ctx context.Context, appID,
 			}
 		}
 		if time.Now().After(deadline) {
-			return phala.CVMInfo{}, fmt.Errorf("timed out waiting for app %q instance %q to become running", appID, name)
+			return phala.CVMInfo{}, fmt.Errorf("timed out waiting for app %q instance %q (identity required: %t, running required: %t)", appID, name, identity, running)
 		}
 		select {
 		case <-ctx.Done():
@@ -800,6 +835,30 @@ func (r *appInstanceResource) waitForInstanceRunning(ctx context.Context, appID,
 		case <-time.After(pollInterval(3 * time.Second)):
 		}
 	}
+}
+
+func (r *appInstanceResource) resolveInstanceIdentity(ctx context.Context, cvm *phala.CVMInfo) error {
+	vmUUID := strings.TrimSpace(cvmInfoVMUUID(cvm))
+	if vmUUID == "" {
+		return fmt.Errorf("cannot resolve instance identity without vm_uuid")
+	}
+	state, err := r.client.GetCVMState(ctx, vmUUID)
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		return fmt.Errorf("empty CVM state for %q", vmUUID)
+	}
+	raw := (*state)["instance_id"]
+	if raw == nil {
+		return nil
+	}
+	identity, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("invalid instance_id type in CVM state for %q", vmUUID)
+	}
+	cvm.InstanceID = &identity
+	return nil
 }
 
 func (r *appInstanceResource) waitForInstanceDeletion(ctx context.Context, appID, name string, deadline time.Time) error {

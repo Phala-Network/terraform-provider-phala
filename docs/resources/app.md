@@ -70,7 +70,7 @@ Downstream `phala_app_instance` resources should set `for_each = toset(phala_app
 `phala_app.Update` propagates mutable-field changes across every CVM in a members-mode app while preserving slot identity (`vm_uuid` and `name` are unchanged):
 
 - **Compose-body changes** (`docker_compose`, `pre_launch_script`, `public_*`, `gateway_enabled`, `secure_time`, env-key list changes) go through the cloud's app-revision endpoint. The provider provisions + applies on the bootstrap CVM (creating a new revision row), then `POST /apps/{id}/revisions/{rev}/redeploy` fans the same revision out to every other slot. Each CVM's `compose_hash` flips to the new value; nothing is destroyed and recreated.
-- **Env value changes** (the common "rotate a secret" case) use a per-CVM `PATCH /cvms/{uuid}/envs` fan-out. The app-rooted KMS public key is shared across all slots, so the same encrypted_env bytes are accepted by every slot. `compose_hash` stays unchanged (no new revision).
+- **Env value changes** use a per-CVM `PATCH /cvms/{uuid}/envs` fan-out by default. Set `env_update_scope = "bootstrap"` when `phala_app_instance` resources own the other slots' environments. The parent then updates only its bootstrap CVM and leaves per-slot values intact. `compose_hash` stays unchanged.
 - **OS image, instance size, and disk size changes** fan out via `PATCH /cvms/{uuid}/os-image` and `PATCH /cvms/{uuid}/resources` respectively — the cloud has no app-level analog. Sequential, fail-fast.
 
 The one structural change still blocked is **removing the `members` attribute** from a previously-members-mode app: that would leave the `phala_app_instance` slots orphaned. The provider blocks this at plan time and asks you to destroy and recreate.
@@ -106,6 +106,7 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `disk_size` (Number) Disk size in GB.
 - `encrypted_env` (String, Sensitive) Hex-encoded encrypted env payload (manual mode).
 - `env` (Map of String) Plaintext env vars. Provider auto-derives env_keys and encrypts values before API submission. Plaintext still exists in Terraform state. Mark sensitive values at the variable level rather than the schema level (see Phala-Network/phala-cloud#246: schema-level Sensitive on a Map causes Terraform Core to suppress in-place env diffs).
+- `env_update_scope` (String) Environment value update targets: `all` (default) or `bootstrap`. Use `bootstrap` with separately managed per-slot environments. This setting does not change app-wide measured compose revision rollouts.
 - `env_compose_hash` (String) Optional compose hash for phase-2 encrypted env update flow (contract-owned KMS; used with env_transaction_hash).
 - `env_keys` (List of String) Allowed environment variable keys used with encrypted_env/manual mode.
 - `env_transaction_hash` (String) Optional on-chain transaction hash for phase-2 encrypted env update flow (contract-owned KMS; used with env_compose_hash).
@@ -157,6 +158,5 @@ Read-Only:
 - `region` (String)
 - `status` (String)
 - `vm_uuid` (String)
-
 
 

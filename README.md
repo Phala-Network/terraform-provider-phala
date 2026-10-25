@@ -6,6 +6,13 @@ Start with `phala_app`. It deploys one CVM under a single app identity with a Do
 
 This provider is intentionally close to the Terraform ergonomics people expect from providers like DigitalOcean: catalog data sources, declarative compute resources, explicit power control, SSH key resources, and straightforward outputs such as `app_id`, `cvm_ids`, and `endpoint`.
 
+For parallel bootstrap, create the app with `wait_for_ready = false`, then
+use named instance resources to wait for its slots. `wait_for_identity = true`
+waits only for an instance ID, including through the host state API before
+cloud inventory synchronization. Enabling `wait_for_ready` later waits without
+restarting the CVM. Use `env_update_scope = "bootstrap"` on the parent when
+instance resources own the other slots' environments.
+
 ## Before You Start
 
 You need:
@@ -28,6 +35,10 @@ export PHALA_CLOUD_API_KEY="phak_xxx"
 Provider environment variables:
 
 - `PHALA_CLOUD_API_KEY`
+- `PHALA_CLOUD_REQUESTS_PER_MINUTE` (positive integer, default `180`). API
+  request starts are paced per key and base URL within the provider process.
+  Provider aliases share that budget. HTTP responses and CVM boots remain
+  concurrent. Other processes and the cloud's hourly quota are not covered.
 
 ## Quick Start
 
