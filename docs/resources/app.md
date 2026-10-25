@@ -106,10 +106,10 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `disk_size` (Number) Disk size in GB.
 - `encrypted_env` (String, Sensitive) Hex-encoded encrypted env payload (manual mode).
 - `env` (Map of String) Plaintext env vars. Provider auto-derives env_keys and encrypts values before API submission. Plaintext still exists in Terraform state. Mark sensitive values at the variable level rather than the schema level (see Phala-Network/phala-cloud#246: schema-level Sensitive on a Map causes Terraform Core to suppress in-place env diffs).
-- `env_update_scope` (String) Environment value update targets: `all` (default) or `bootstrap`. Use `bootstrap` with separately managed per-slot environments. This setting does not change app-wide measured compose revision rollouts.
 - `env_compose_hash` (String) Optional compose hash for phase-2 encrypted env update flow (contract-owned KMS; used with env_transaction_hash).
 - `env_keys` (List of String) Allowed environment variable keys used with encrypted_env/manual mode.
 - `env_transaction_hash` (String) Optional on-chain transaction hash for phase-2 encrypted env update flow (contract-owned KMS; used with env_compose_hash).
+- `env_update_scope` (String) Target of environment value updates: `all` (default) or `bootstrap`. Use `bootstrap` when phala_app_instance resources own per-slot environments; the parent then updates only its own bootstrap CVM. This does not change compose revision rollout scope.
 - `gateway_enabled` (Boolean) Enable public gateway routing (compose file setting). Changing this triggers compose update/restart.
 - `image` (String) OS image name.
 - `kms` (String) KMS type for app provisioning (`phala`, `ethereum`, `base`). Changing this forces replacement.
@@ -138,7 +138,7 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `gateway_cname` (String) Operator-configured CNAME alias for this app's gateway, if one has been set via the cloud UI. Empty when not configured. Sourced from `CVMGatewayInfo.cname` on the primary CVM.
 - `id` (String) Terraform ID (same as app_id).
 - `instances` (Attributes List) Computed per-instance view of CVMs currently attached to this app. (see [below for nested schema](#nestedatt--instances))
-- `primary_cvm_id` (String) Bootstrap CVM identifier — the CVM created by `phala_app` itself, which in members (MIG) mode is also the slot whose name equals `phala_app.name`. This is the only CVM that `phala_app` mutates directly.
+- `primary_cvm_id` (String) Bootstrap CVM identifier — the CVM created by `phala_app` itself, which in members (MIG) mode is also the slot whose name equals `phala_app.name`. Use env_update_scope to select the target scope of environment value updates.
 - `status` (String) Current CVM status.
 
 <a id="nestedatt--instances"></a>
@@ -158,5 +158,6 @@ Read-Only:
 - `region` (String)
 - `status` (String)
 - `vm_uuid` (String)
+
 
 

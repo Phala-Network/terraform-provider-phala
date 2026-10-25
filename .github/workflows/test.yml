@@ -11,6 +11,9 @@ permissions:
 
 jobs:
   test:
+    env:
+      GOWORK: "off"
+      GOFLAGS: "-mod=readonly"
     runs-on:
       - self-hosted
       - linux
