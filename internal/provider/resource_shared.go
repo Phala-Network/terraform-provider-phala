@@ -155,7 +155,7 @@ func sharedCVMSchemaAttrs() map[string]schema.Attribute {
 		"env_keys": schema.ListAttribute{
 			Optional:            true,
 			ElementType:         types.StringType,
-			MarkdownDescription: "Allowed environment variable keys used with encrypted_env/manual mode.",
+			MarkdownDescription: "Measured allowed environment variable keys. Use with encrypted_env, or declare keys alone when phala_cvm_env manages values separately. Do not combine with inline env.",
 		},
 		"env_compose_hash": schema.StringAttribute{
 			Optional: true,
@@ -460,9 +460,9 @@ func parseEnvConfig(
 	}
 
 	if hasAutoEnv && !forCreate {
-		diags.Append(validateEncryptedEnvConfig(true, true, composeHash, txHash)...)
+		diags.Append(validateEncryptedEnvConfig(true, composeHash, txHash)...)
 	} else {
-		diags.Append(validateEncryptedEnvConfig(hasManualEncrypted, len(manualKeys) > 0, composeHash, txHash)...)
+		diags.Append(validateEncryptedEnvConfig(hasManualEncrypted, composeHash, txHash)...)
 	}
 	if diags.HasError() {
 		return nil, diags

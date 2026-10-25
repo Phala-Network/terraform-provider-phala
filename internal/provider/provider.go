@@ -168,6 +168,7 @@ func (p *phalaProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewAppInstanceResource,
 		NewAppPreflightResource,
 		NewCVMPowerResource,
+		NewCVMEnvResource,
 		NewSSHKeyResource,
 	}
 }

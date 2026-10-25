@@ -6,6 +6,8 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ### Added
 
+- Add `phala_cvm_env` to configure encrypted environment values after CVM identity allocation, including bootstrap CVMs. Declare the measured key allowlist separately with `phala_app.env_keys` to avoid self-referential deployment cycles in one normal apply.
+
 - `phala_app_instance.wait_for_identity` waits for an instance-pinned endpoint identity without waiting for the full CVM boot, allowing dependent CVMs to launch concurrently.
 
 - Pace API request starts at 180/minute by default, sharing a budget between provider aliases using one API key and base URL. `PHALA_CLOUD_REQUESTS_PER_MINUTE` changes the budget without serializing CVM boot operations.

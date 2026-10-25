@@ -1,0 +1,49 @@
+---
+page_title: "{{ .Name }} Resource - {{ .ProviderShortName }}"
+subcategory: ""
+description: |-
+  {{ .Description }}
+---
+
+# {{ .Name }} ({{ .Type }})
+
+{{ .Description }}
+
+## Example Usage
+
+{{ tffile "examples/resources/phala_cvm_env/resource.tf" }}
+
+## Ownership and lifecycle
+
+`phala_app.env_keys` owns the measured allowlist; `phala_cvm_env.env` owns
+the complete value map. Omit `env` and `encrypted_env` on the allocation
+resources, including the adopted bootstrap slot. Never declare two value
+owners for one CVM. Changing allowlisted keys remains a measured app-compose
+change, with the normal KMS and revision-rollout requirements.
+
+The provider waits for any existing Cloud operation to finish, validates
+every key against the current allowlist, encrypts values using the CVM's
+environment public key, and submits a value-only update. It never writes
+`env_keys` or reconstructs the compose manifest. Optional readiness waits
+for a running CVM with no operation in progress, not application health.
+Independent CVM resources run concurrently under Terraform's parallelism.
+
+Plaintext exists in Terraform state. Protect the state backend. Cloud does
+not expose plaintext for readback, so this resource cannot detect external
+value edits. It does detect a deleted CVM; changing `cvm_id` replaces only
+the environment binding, not the CVM.
+
+Destroying this resource releases ownership without clearing values or
+restarting/deleting the CVM. To clear values on a retained CVM, apply
+`env = {}` before removing the binding.
+
+## Migration from inline values
+
+In one configuration change, replace the app's inline `env` with the same
+explicit `env_keys`, remove per-instance inline values, and add environment
+resources for every retained CVM. Keep app/slot addresses and placement
+unchanged. The allocation resources relinquish value ownership without
+erasing the existing payload; the new resources configure it in place.
+Review the plan to confirm no CVM replacements are proposed.
+
+{{ .SchemaMarkdown }}
