@@ -1,0 +1,42 @@
+---
+page_title: "{{ .Name }} Resource - {{ .ProviderShortName }}"
+subcategory: ""
+description: |-
+  {{ .Description }}
+---
+
+# {{ .Name }} ({{ .Type }})
+
+{{ .Description }}
+
+## Example Usage
+
+{{ tffile "examples/resources/phala_cvm_env/resource.tf" }}
+
+## Ownership and lifecycle
+
+Declare measured keys with `phala_app.env_keys`; omit `env` and `encrypted_env`
+on app/instance resources, including the adopted bootstrap slot. Each CVM
+must have one value owner. Changing allowed keys remains a measured compose
+change subject to KMS and revision-rollout requirements.
+
+Updates wait for the target's existing operation, validate keys, and encrypt
+values with its environment public key. They never write `env_keys` or
+reconstruct the manifest. Independent targets update concurrently; readiness
+means a running CVM with no pending operation, not application health.
+
+Protect Terraform state: it contains plaintext values. Cloud does not expose
+plaintext readback, so external value edits cannot be detected.
+
+Destroy releases ownership without clearing values or restarting/deleting
+the CVM. Apply `env = {}` to clear retained values. Changing `cvm_id` replaces
+only the environment binding.
+
+## Migration from inline values
+
+Replace inline values with the same explicit app `env_keys` and one
+`phala_cvm_env` per retained CVM. Omission relinquishes inline ownership
+without erasing values. Keep resource addresses and placement unchanged;
+review the plan to confirm no CVM replacements.
+
+{{ .SchemaMarkdown }}

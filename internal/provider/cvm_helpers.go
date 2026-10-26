@@ -506,18 +506,13 @@ func kmsPayloadValue(kms string) string {
 
 func validateEncryptedEnvConfig(
 	hasEncryptedEnv bool,
-	hasEnvKeys bool,
 	envComposeHash string,
 	envTransactionHash string,
 ) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	if hasEnvKeys && !hasEncryptedEnv {
-		diags.AddError(
-			"Invalid encrypted env configuration",
-			"env_keys requires encrypted_env to be set.",
-		)
-	}
+	// An allowlist can be declared before values are available. A separate
+	// phala_cvm_env resource can own those values after identity allocation.
 
 	hasCompose := strings.TrimSpace(envComposeHash) != ""
 	hasTx := strings.TrimSpace(envTransactionHash) != ""

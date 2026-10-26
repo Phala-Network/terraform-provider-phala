@@ -584,6 +584,10 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		!plan.EnvKeys.Equal(state.EnvKeys) ||
 		!plan.EnvComposeHash.Equal(state.EnvComposeHash) ||
 		!plan.EnvTransactionHash.Equal(state.EnvTransactionHash)
+	// Key-only declarations are measured compose configuration, not value
+	// ownership. Preserve externally managed values, including on handover
+	// from inline env to phala_cvm_env.
+	envChanged = envChanged && (envCfg.HasAutoEnv || envCfg.HasManualEncrypted)
 
 	// Encrypt auto-env up-front (once per Update). The app-rooted KMS
 	// pubkey is shared across all CVMs in one app, so encrypting against

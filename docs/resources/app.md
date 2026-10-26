@@ -56,6 +56,7 @@ output "web_url" {
 - `docker_compose`, runtime visibility flags, OS image, encrypted env, and instance size are mutable in place on a single-CVM app — they target the bootstrap CVM via per-CVM PATCH endpoints.
 - `instances` exposes the current per-CVM view (bootstrap + any `phala_app_instance` slots).
 - `wait_for_ready = true` waits until the bootstrap CVM reports running before returning.
+- For values that depend on allocated instance identities, declare `env_keys` without inline values and use [`phala_cvm_env`](cvm_env.md) after allocation. Allocate with `wait_for_ready = false`; the separate environment resource waits after configuration.
 - `storage_fs`, placement fields, and deterministic identity inputs can affect replacement behavior; check the schema details below before changing them in-place.
 - SSH access is account-scoped: register keys with the [`phala_ssh_key`](ssh_key.md) resource. Keys on your account are injected into CVMs at launch — there is no per-app SSH key field.
 
@@ -107,7 +108,7 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `encrypted_env` (String, Sensitive) Hex-encoded encrypted env payload (manual mode).
 - `env` (Map of String) Plaintext env vars. Provider auto-derives env_keys and encrypts values before API submission. Plaintext still exists in Terraform state. Mark sensitive values at the variable level rather than the schema level (see Phala-Network/phala-cloud#246: schema-level Sensitive on a Map causes Terraform Core to suppress in-place env diffs).
 - `env_compose_hash` (String) Optional compose hash for phase-2 encrypted env update flow (contract-owned KMS; used with env_transaction_hash).
-- `env_keys` (List of String) Allowed environment variable keys used with encrypted_env/manual mode.
+- `env_keys` (List of String) Measured allowed environment variable keys. Use with encrypted_env, or declare keys alone when phala_cvm_env manages values separately. Do not combine with inline env.
 - `env_transaction_hash` (String) Optional on-chain transaction hash for phase-2 encrypted env update flow (contract-owned KMS; used with env_compose_hash).
 - `env_update_scope` (String) Target of environment value updates: `all` (default) or `bootstrap`. Use `bootstrap` when phala_app_instance resources own per-slot environments; the parent then updates only its own bootstrap CVM. This does not change compose revision rollout scope.
 - `gateway_enabled` (Boolean) Enable public gateway routing (compose file setting). Changing this triggers compose update/restart.

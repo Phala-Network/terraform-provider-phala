@@ -501,6 +501,10 @@ func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateReq
 	// RequiresReplace (it's a content-addressed pointer to a compose/revision,
 	// not freely settable alongside docker_compose).
 	envChanged := !plan.Env.Equal(state.Env) || !plan.EncryptedEnv.Equal(state.EncryptedEnv)
+	// Omission releases value ownership without erasing the current payload.
+	// This permits an in-place handover to phala_cvm_env. An explicit empty
+	// env map still owns (and clears) the environment.
+	envChanged = envChanged && (!plan.Env.IsNull() || !plan.EncryptedEnv.IsNull())
 	composeChanged := !plan.DockerCompose.Equal(state.DockerCompose)
 	preLaunchChanged := !plan.PreLaunchScript.Equal(state.PreLaunchScript)
 	appID := ensureAppPrefix(strings.TrimSpace(plan.AppID.ValueString()))

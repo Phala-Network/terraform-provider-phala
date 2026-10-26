@@ -13,6 +13,10 @@ cloud inventory synchronization. Enabling `wait_for_ready` later waits without
 restarting the CVM. Use `env_update_scope = "bootstrap"` on the parent when
 instance resources own the other slots' environments.
 
+Use [`phala_cvm_env`](docs/resources/cvm_env.md) when values reference newly
+allocated instance identities. Its example separates allocation from values
+in one apply, without targeting or generated variable files.
+
 ## Before You Start
 
 You need:
