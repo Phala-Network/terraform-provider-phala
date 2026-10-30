@@ -92,8 +92,8 @@ func (d *appPreflightDataSource) Schema(_ context.Context, _ datasource.SchemaRe
 				MarkdownDescription: "KMS type for app provisioning. Defaults to phala when omitted.",
 			},
 			"node": schema.StringAttribute{
-				Required:            true,
-				MarkdownDescription: "Physical node name for placement.",
+				Optional:            true,
+				MarkdownDescription: "Physical node name for placement. When omitted, placement is automatic.",
 			},
 			"custom_app_id": schema.StringAttribute{
 				Optional:            true,

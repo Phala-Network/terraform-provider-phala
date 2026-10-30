@@ -180,7 +180,7 @@ func (d *nodesDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 
 		rows = append(rows, nodeDataSourceRow{
 			NodeID:            types.Int64Value(nodeID),
-			Node:              nullableStringPtr(node.Node),
+			Node:              types.StringValue(node.Node),
 			Name:              nullableString(node.Name),
 			Region:            nullableString(region),
 			Listed:            types.BoolValue(node.Listed),
