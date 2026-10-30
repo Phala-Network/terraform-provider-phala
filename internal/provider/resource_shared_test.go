@@ -174,6 +174,33 @@ func TestCreateNodeAndToken(t *testing.T) {
 	}
 }
 
+func TestAutomaticPlacementRequestOmitsNode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"node", "node_id", "teepod_id"} {
+			if _, ok := body[key]; ok {
+				t.Errorf("automatic placement sent %s", key)
+			}
+		}
+		_, _ = w.Write([]byte(`{"app_id":"app_test","token":"token"}`))
+	}))
+	defer server.Close()
+	client, err := phala.NewClient(phala.WithAPIKey("test"), phala.WithBaseURL(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := buildProvisionReq(provisionFields{Node: types.StringNull()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ProvisionCVM(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCommitCreateRequiresToken(t *testing.T) {
 	_, err := commitAndCreate(context.Background(), nil, &phala.ProvisionCVMResponse{}, "", false, nil)
 	if err == nil {
@@ -184,11 +211,15 @@ func TestCommitCreateRequiresToken(t *testing.T) {
 func TestBuildProvisionReq(t *testing.T) {
 	t.Parallel()
 
-	t.Run("missing node", func(t *testing.T) {
-		for _, node := range []types.String{types.StringNull(), types.StringUnknown(), types.StringValue("  ")} {
-			if _, err := buildProvisionReq(provisionFields{Node: node}); err == nil {
-				t.Errorf("expected an error for node %v", node)
+	t.Run("optional node", func(t *testing.T) {
+		for _, node := range []types.String{types.StringNull(), types.StringUnknown()} {
+			req, err := buildProvisionReq(provisionFields{Node: node})
+			if err != nil || req.Node != nil {
+				t.Errorf("node %v: request = %#v, error = %v", node, req, err)
 			}
+		}
+		if _, err := buildProvisionReq(provisionFields{Node: types.StringValue("  ")}); err == nil {
+			t.Error("expected an error for empty node")
 		}
 	})
 

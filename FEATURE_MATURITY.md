@@ -22,7 +22,7 @@ Last updated: 2026-05-20
 | `phala_sizes` | beta | read | Catalog data source. |
 | `phala_regions` | beta | read | Catalog data source (apps filter options + teepod availability fallback). |
 | `phala_images` | beta | read | Catalog data source. |
-| `phala_nodes` | beta | read | Node catalog for placement (`node_id`) with optional region/on-chain-KMS filters. |
+| `phala_nodes` | beta | read | Node catalog for placement (`node`, the physical node name) with optional region/on-chain-KMS filters. |
 | `phala_attestation` | beta | read | On-demand CVM attestation fetch by `cvm_id` (read-only). |
 | data source `phala_app_preflight` | beta | read | Reads preflight app metadata for a declared app shape without deploying CVMs. |
 
@@ -39,7 +39,7 @@ Last updated: 2026-05-20
 | Encrypted env workflow | yes (auto via `env`, manual via `encrypted_env` + `env_keys`) |
 | Compose runtime settings | yes (`public_logs`, `public_sysinfo`, `public_tcbinfo`, `gateway_enabled`, `secure_time`) |
 | Deterministic app identity inputs | partial (`custom_app_id` + `nonce` for `kms=phala`) |
-| Node placement input | yes (`node_id` -> provision `teepod_id`) |
+| Node placement input | yes (`node` physical node name; optional) |
 | Node discovery for placement | yes (`phala_nodes`) |
 | Storage FS selection | yes (`storage_fs`: `zfs`/`ext4`, immutable after create) |
 | Disk resize semantics | grow-only (`disk_size` shrink rejected) |

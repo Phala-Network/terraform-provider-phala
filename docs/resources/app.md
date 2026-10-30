@@ -114,7 +114,7 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `kms` (String) KMS type for app provisioning (`phala`, `ethereum`, `base`). Changing this forces replacement.
 - `listed` (Boolean) Whether the app's CVM(s) are publicly listed in the marketplace. Updated in place via `PATCH /cvms/{uuid}/listed` (a plain metadata flag — no redeploy, no restart, no attestation change), fanned out across every slot in members mode.
 - `members` (List of String) Optional list of stable slot names this app's replica set is composed of (MIG-style usage). When set, `name` must be one of these values, and `replicas` must be unset or 1 — the legacy anonymous-replica path is incompatible with named slots. Downstream `phala_app_instance` resources should derive their `for_each` from this attribute so the slot list is the single source of truth.
-- `node_id` (Number) Optional target node (teepod) ID for initial placement. Changing this forces replacement.
+- `node` (String) Physical node name for initial placement. When omitted on creation, placement is automatic. Omitting it later retains the stored placement. Changing the name forces replacement.
 - `nonce` (Number) Optional nonce paired with custom_app_id for PHALA KMS deterministic app_id flow. Changing this forces replacement.
 - `pre_launch_script` (String) Optional pre-launch script content.
 - `public_logs` (Boolean) Expose container logs publicly (compose file setting). Changing this triggers compose update/restart.
@@ -137,6 +137,7 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `gateway_cname` (String) Operator-configured CNAME alias for this app's gateway, if one has been set via the cloud UI. Empty when not configured. Sourced from `CVMGatewayInfo.cname` on the primary CVM.
 - `id` (String) Terraform ID (same as app_id).
 - `instances` (Attributes List) Computed per-instance view of CVMs currently attached to this app. (see [below for nested schema](#nestedatt--instances))
+- `legacy_node_id` (Number) Internal state migration field for a legacy teepod ID.
 - `primary_cvm_id` (String) Bootstrap CVM identifier — the CVM created by `phala_app` itself, which in members (MIG) mode is also the slot whose name equals `phala_app.name`. This is the only CVM that `phala_app` mutates directly.
 - `status` (String) Current CVM status.
 

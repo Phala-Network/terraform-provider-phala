@@ -16,7 +16,8 @@ func instanceObjectType() tftypes.Object {
 		"id":                   tftypes.String,
 		"app_id":               tftypes.String,
 		"name":                 tftypes.String,
-		"node_id":              tftypes.Number,
+		"legacy_node_id":       tftypes.Number,
+		"node":                 tftypes.String,
 		"docker_compose":       tftypes.String,
 		"pre_launch_script":    tftypes.String,
 		"env":                  tftypes.Map{ElementType: tftypes.String},
@@ -48,7 +49,8 @@ func instanceStateValue(envVal string) tftypes.Value {
 		"id":                   tftypes.NewValue(tftypes.String, "app_test:worker-1"),
 		"app_id":               tftypes.NewValue(tftypes.String, "app_test"),
 		"name":                 tftypes.NewValue(tftypes.String, "worker-1"),
-		"node_id":              tftypes.NewValue(tftypes.Number, nil),
+		"legacy_node_id":       tftypes.NewValue(tftypes.Number, nil),
+		"node":                 tftypes.NewValue(tftypes.String, nil),
 		"docker_compose":       tftypes.NewValue(tftypes.String, nil),
 		"pre_launch_script":    tftypes.NewValue(tftypes.String, nil),
 		"env":                  env,
@@ -80,7 +82,8 @@ func instanceConfigValue(envVal string) tftypes.Value {
 		"id":                   tftypes.NewValue(tftypes.String, nil),
 		"app_id":               tftypes.NewValue(tftypes.String, "app_test"),
 		"name":                 tftypes.NewValue(tftypes.String, "worker-1"),
-		"node_id":              tftypes.NewValue(tftypes.Number, nil),
+		"legacy_node_id":       tftypes.NewValue(tftypes.Number, nil),
+		"node":                 tftypes.NewValue(tftypes.String, nil),
 		"docker_compose":       tftypes.NewValue(tftypes.String, nil),
 		"pre_launch_script":    tftypes.NewValue(tftypes.String, nil),
 		"env":                  env,
@@ -196,7 +199,7 @@ func TestAppInstanceForceNewMatrix(t *testing.T) {
 		newVal   tftypes.Value
 		forceNew bool
 	}{
-		{"node_id", tftypes.NewValue(tftypes.Number, 18), true},
+		{"node", tftypes.NewValue(tftypes.String, "physical-node"), true},
 		{"docker_compose", tftypes.NewValue(tftypes.String, "services:\n  x:\n"), false},
 		{"pre_launch_script", tftypes.NewValue(tftypes.String, "#!/bin/sh\necho hi\n"), false},
 		{"compose_hash", tftypes.NewValue(tftypes.String, "abc123"), true},

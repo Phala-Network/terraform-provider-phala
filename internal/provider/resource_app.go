@@ -23,6 +23,7 @@ var _ resource.Resource = &appResource{}
 var _ resource.ResourceWithImportState = &appResource{}
 var _ resource.ResourceWithValidateConfig = &appResource{}
 var _ resource.ResourceWithModifyPlan = &appResource{}
+var _ resource.ResourceWithUpgradeState = &appResource{}
 
 type appResource struct {
 	client *phala.Client
@@ -36,7 +37,7 @@ type appResourceModel struct {
 	Size                types.String `tfsdk:"size"`
 	Image               types.String `tfsdk:"image"`
 	KMS                 types.String `tfsdk:"kms"`
-	NodeID              types.Int64  `tfsdk:"node_id"`
+	LegacyNodeID        types.Int64  `tfsdk:"legacy_node_id"`
 	Node                types.String `tfsdk:"node"`
 	CustomAppID         types.String `tfsdk:"custom_app_id"`
 	Nonce               types.Int64  `tfsdk:"nonce"`
@@ -211,6 +212,7 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			"slot list is the single source of truth.",
 	}
 	resp.Schema = schema.Schema{
+		Version:             1,
 		MarkdownDescription: "Manages a Phala Cloud App (app_id + shared compose/env + replica count).",
 		Attributes:          attrs,
 	}
@@ -252,16 +254,7 @@ func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 		return
 	}
 
-	var oldNodeID, plannedNodeID types.Int64
-	var plannedNode types.String
-	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("node_id"), &oldNodeID)...)
-	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("node_id"), &plannedNodeID)...)
-	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("node"), &plannedNode)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	if !oldNodeID.IsNull() && (!oldNodeID.Equal(plannedNodeID) || !plannedNode.IsNull()) {
-		resp.Diagnostics.AddError("Legacy node placement requires state migration", "This app has a legacy node_id in its state. Migration to a physical node name is not yet supported; do not remove node_id or add node until the state migration is available.")
+	if legacyPlacementPending(ctx, req.State, &resp.Diagnostics) {
 		return
 	}
 
@@ -310,9 +303,6 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 
 	identity, diags := resolveProvisionIdentity(plan.KMS, plan.CustomAppID, plan.Nonce)
 	resp.Diagnostics.Append(diags...)
-	if !plan.NodeID.IsNull() {
-		resp.Diagnostics.AddError("Unsupported node_id", "Use node with a physical node name for new apps.")
-	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -424,6 +414,12 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
+	if plan.Node.IsUnknown() {
+		plan.Node = types.StringNull()
+	}
+	if plan.LegacyNodeID.IsUnknown() {
+		plan.LegacyNodeID = types.Int64Null()
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -436,13 +432,17 @@ func (r *appResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 
 	appID := appIDFromState(state)
 	if appID == "" {
+		if !state.LegacyNodeID.IsNull() {
+			resp.Diagnostics.AddError("Cannot migrate node placement", "The legacy state has no app ID, so its placement cannot be resolved.")
+			return
+		}
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
 	fetched, err := r.fetchAppAndCVMs(ctx, appID)
 	if err != nil {
-		if isNotFound(err) {
+		if isNotFound(err) && state.LegacyNodeID.IsNull() {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -450,6 +450,9 @@ func (r *appResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		return
 	}
 	appendReplicaListWarning(&resp.Diagnostics, fetched.ReplicaListWarning)
+	if !migrateLegacyNode(&state.LegacyNodeID, &state.Node, fetched.CVMs, &resp.Diagnostics) {
+		return
+	}
 	resp.Diagnostics.Append(r.populateState(ctx, &state, fetched.App, fetched.CVMs)...)
 	if resp.Diagnostics.HasError() {
 		return

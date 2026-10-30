@@ -122,7 +122,13 @@ func TestAppResourceEnvUpdateTriggersEnvsPATCH(t *testing.T) {
 	configV1 := envUpdateConfigValue(t, "v1")
 	configV1DV, _ := tfprotov6.NewDynamicValue(objType, configV1)
 	priorNullDV, _ := tfprotov6.NewDynamicValue(objType, tftypes.NewValue(objType, nil))
-	proposedCreateDV, _ := tfprotov6.NewDynamicValue(objType, envUpdateProposedCreate(t, "v1"))
+	var proposedValues map[string]tftypes.Value
+	if err := envUpdateProposedCreate(t, "v1").As(&proposedValues); err != nil {
+		t.Fatal(err)
+	}
+	proposedValues["node"] = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+	proposedValues["legacy_node_id"] = tftypes.NewValue(tftypes.Number, tftypes.UnknownValue)
+	proposedCreateDV, _ := tfprotov6.NewDynamicValue(objType, tftypes.NewValue(objType, proposedValues))
 
 	plan1, err := server.PlanResourceChange(ctx, &tfprotov6.PlanResourceChangeRequest{
 		TypeName:         "phala_app",
@@ -132,6 +138,18 @@ func TestAppResourceEnvUpdateTriggersEnvsPATCH(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("plan1: %v", err)
+	}
+	assertNoDiagnostics(t, plan1.Diagnostics)
+	plannedValue, err := plan1.PlannedState.Unmarshal(objType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plannedCreateAttrs map[string]tftypes.Value
+	if err := plannedValue.As(&plannedCreateAttrs); err != nil {
+		t.Fatal(err)
+	}
+	if plannedCreateAttrs["node"].IsKnown() || plannedCreateAttrs["legacy_node_id"].IsKnown() {
+		t.Fatalf("expected unknown planned placement fields: %v %v", plannedCreateAttrs["node"], plannedCreateAttrs["legacy_node_id"])
 	}
 	apply1, err := server.ApplyResourceChange(ctx, &tfprotov6.ApplyResourceChangeRequest{
 		TypeName:     "phala_app",
@@ -152,6 +170,26 @@ func TestAppResourceEnvUpdateTriggersEnvsPATCH(t *testing.T) {
 	var createdAttrs map[string]tftypes.Value
 	if err := createdState.As(&createdAttrs); err != nil {
 		t.Fatalf("unmarshal created state: %v", err)
+	}
+
+	if !createdAttrs["node"].IsNull() || !createdAttrs["legacy_node_id"].IsNull() {
+		t.Fatalf("create placement fields not null: %v %v", createdAttrs["node"], createdAttrs["legacy_node_id"])
+	}
+	refreshed, err := server.ReadResource(ctx, &tfprotov6.ReadResourceRequest{TypeName: "phala_app", CurrentState: apply1.NewState})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoDiagnostics(t, refreshed.Diagnostics)
+	readValue, err := refreshed.NewState.Unmarshal(objType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var readAttrs map[string]tftypes.Value
+	if err := readValue.As(&readAttrs); err != nil {
+		t.Fatal(err)
+	}
+	if !readAttrs["node"].IsNull() || !readAttrs["legacy_node_id"].IsNull() {
+		t.Fatalf("read placement fields not null: %v %v", readAttrs["node"], readAttrs["legacy_node_id"])
 	}
 
 	// Step 2: Plan an update with env={IMAGE: v2}.
@@ -268,7 +306,7 @@ func envUpdateAppObjectType() tftypes.Object {
 		"size":                   tftypes.String,
 		"image":                  tftypes.String,
 		"kms":                    tftypes.String,
-		"node_id":                tftypes.Number,
+		"legacy_node_id":         tftypes.Number,
 		"node":                   tftypes.String,
 		"custom_app_id":          tftypes.String,
 		"nonce":                  tftypes.Number,
@@ -333,7 +371,7 @@ func envUpdateConfigValue(t *testing.T, imageVal string) tftypes.Value {
 		"size":                   tftypes.NewValue(tftypes.String, "tdx.small"),
 		"image":                  tftypes.NewValue(tftypes.String, nil),
 		"kms":                    tftypes.NewValue(tftypes.String, nil),
-		"node_id":                tftypes.NewValue(tftypes.Number, nil),
+		"legacy_node_id":         tftypes.NewValue(tftypes.Number, nil),
 		"node":                   tftypes.NewValue(tftypes.String, nil),
 		"custom_app_id":          tftypes.NewValue(tftypes.String, nil),
 		"nonce":                  tftypes.NewValue(tftypes.Number, nil),
@@ -381,7 +419,7 @@ func envUpdateProposedCreate(t *testing.T, imageVal string) tftypes.Value {
 		"size":                   tftypes.NewValue(tftypes.String, "tdx.small"),
 		"image":                  tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
 		"kms":                    tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
-		"node_id":                tftypes.NewValue(tftypes.Number, nil),
+		"legacy_node_id":         tftypes.NewValue(tftypes.Number, nil),
 		"node":                   tftypes.NewValue(tftypes.String, nil),
 		"custom_app_id":          tftypes.NewValue(tftypes.String, nil),
 		"nonce":                  tftypes.NewValue(tftypes.Number, nil),

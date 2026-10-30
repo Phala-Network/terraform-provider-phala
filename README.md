@@ -261,7 +261,7 @@ data "phala_nodes" "west" {
 resource "phala_app" "pinned" {
   name    = "pinned-app"
   size    = data.phala_sizes.all.sizes[0].slug
-  node_id = data.phala_nodes.west.nodes[0].node_id
+  node    = data.phala_nodes.west.nodes[0].node
 
   docker_compose = <<-YAML
     services:
@@ -333,6 +333,12 @@ Notes:
 - Set `CREATE_CONSUMER_APP=true` to exercise cross-app wiring (`UPSTREAM_APP_ID`, `UPSTREAM_ENDPOINT`).
 - `WAIT_FOR_READY=false` can be useful for infrastructure lifecycle tests when runtime boot latency is variable.
 
+### Migrate a legacy node selector
+
+Replace `node_id` in `phala_app` or `phala_app_instance` configuration with `node`, using the same physical node name shown by `data.phala_nodes`. Run a normal plan with refresh enabled. The provider uses the current CVM's reported teepod ID and physical node name to migrate the stored selector. A matching name does not replace the resource. You can also omit `node` after migration to retain the stored placement.
+
+If no current CVM reports the old teepod ID and its physical node name, the plan stops without changing placement. Resolve the old placement before continuing. Do not disable refresh during this migration.
+
 ## Behavior and Lifecycle Notes
 
 ### `phala_app`
@@ -343,7 +349,7 @@ Notes:
 - Create-time identity/placement fields:
   - `kms` (currently `phala` only; `ethereum`/`base` planned)
   - `custom_app_id` + `nonce` (deterministic identity flow for PHALA KMS)
-  - `node_id` (maps to provision `teepod_id`; discover via `data.phala_nodes`)
+  - `node` (physical node name; discover via `data.phala_nodes`, or omit for automatic placement)
 - In-place updates on the bootstrap CVM: size, disk, OS image, docker compose, pre-launch script, encrypted env. In members mode these app-level updates are blocked at plan time (they only mutate the bootstrap CVM, not the named slots) — destroy and recreate to roll new compose across the set.
 - Compose-file runtime settings are exposed as first-class attributes:
   - `public_logs`

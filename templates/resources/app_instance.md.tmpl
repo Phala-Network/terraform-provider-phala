@@ -88,10 +88,12 @@ The gateway suffix is shared across every slot in an app, so reading it from any
 
 - The Terraform ID is `<app_id>:<name>`. Import via
   `terraform import phala_app_instance.foo app_abcdef...:consul-1`.
-- `name`, `app_id`, and the optional override fields (`node_id`,
-  `docker_compose`, `pre_launch_script`, `env`, `encrypted_env`, `compose_hash`)
-  all force replacement. Compose / env updates that should apply across the
-  whole replica set must go through `phala_app`.
+- Changing `name`, `app_id`, `node`, or `compose_hash` forces replacement for
+  managed instances. Compose and environment updates that should apply across
+  the whole replica set must go through `phala_app`.
+- An adopted instance stays owned by `phala_app`. An explicit `node` must match
+  the physical node reported by the existing CVM. Adoption does not move it,
+  and changing `node` on an adopted instance is rejected at plan time.
 - `phala_app_instance.env` only supplies encrypted values for the new instance.
   The env keys must already be allowed by the app compose, usually by declaring
   the same keys on `phala_app.env` for the bootstrap slot.

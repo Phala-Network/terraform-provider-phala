@@ -98,11 +98,14 @@ func TestBuildAppPreflightProvisionReqDefaults(t *testing.T) {
 	req, diags := buildAppPreflightProvisionReq(context.Background(), appPreflightDataSourceModel{
 		Name:          types.StringValue("demo"),
 		Size:          types.StringValue("tdx.small"),
-		Node:          types.StringValue("physical-node"),
+		Node:          types.StringNull(),
 		DockerCompose: types.StringValue("services:\n  app:\n"),
 	})
 	if diags.HasError() {
 		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if req.Node != nil {
+		t.Fatalf("automatic placement sent node: %#v", req.Node)
 	}
 	if req.KMSType == nil || *req.KMSType != "PHALA" {
 		t.Fatalf("default kms_type = %#v", req.KMSType)

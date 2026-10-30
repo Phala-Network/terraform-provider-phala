@@ -22,7 +22,7 @@ Lists available worker nodes (teepods) for CVM placement.
 
 ### Read-Only
 
-- `nodes` (Attributes List) Available nodes for placement (`node_id` maps to resource `node_id`). (see [below for nested schema](#nestedatt--nodes))
+- `nodes` (Attributes List) Available nodes for placement (`node` is the physical node name for app creation). (see [below for nested schema](#nestedatt--nodes))
 
 <a id="nestedatt--nodes"></a>
 ### Nested Schema for `nodes`
@@ -34,6 +34,7 @@ Read-Only:
 - `images` (List of String)
 - `listed` (Boolean)
 - `name` (String)
+- `node` (String)
 - `node_id` (Number)
 - `region` (String)
 - `remaining_cvm_slots` (Number)

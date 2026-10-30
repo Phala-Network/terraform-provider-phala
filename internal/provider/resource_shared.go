@@ -65,16 +65,17 @@ func sharedCVMSchemaAttrs() map[string]schema.Attribute {
 		},
 		"node": schema.StringAttribute{
 			Optional:            true,
-			MarkdownDescription: "Physical node name for initial placement. Changing this forces replacement.",
-			PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
-		},
-		"node_id": schema.Int64Attribute{
-			Optional:            true,
-			DeprecationMessage:  "Legacy state only. Use node for new apps; migration of existing state is not yet supported.",
-			MarkdownDescription: "Legacy teepod ID retained for existing state. Do not change it until state migration is supported.",
-			PlanModifiers: []planmodifier.Int64{
-				int64planmodifier.RequiresReplace(),
+			Computed:            true,
+			MarkdownDescription: "Physical node name for initial placement. When omitted on creation, placement is automatic. Omitting it later retains the stored placement. Changing the name forces replacement.",
+			PlanModifiers: []planmodifier.String{
+				stringplanmodifier.UseStateForUnknown(),
+				stringplanmodifier.RequiresReplace(),
 			},
+		},
+		"legacy_node_id": schema.Int64Attribute{
+			Computed:            true,
+			MarkdownDescription: "Internal state migration field for a legacy teepod ID.",
+			PlanModifiers:       []planmodifier.Int64{int64planmodifier.UseStateForUnknown()},
 		},
 		"custom_app_id": schema.StringAttribute{
 			Optional: true,
@@ -342,11 +343,13 @@ func buildProvisionReq(f provisionFields) (*phala.ProvisionCVMRequest, error) {
 		region := f.Region.ValueString()
 		req.Region = &region
 	}
-	if f.Node.IsNull() || f.Node.IsUnknown() || strings.TrimSpace(f.Node.ValueString()) == "" {
-		return nil, fmt.Errorf("node must be a non-empty physical node name")
+	if !f.Node.IsNull() && !f.Node.IsUnknown() {
+		node := f.Node.ValueString()
+		if strings.TrimSpace(node) == "" {
+			return nil, fmt.Errorf("node must be a non-empty physical node name")
+		}
+		req.Node = &node
 	}
-	node := f.Node.ValueString()
-	req.Node = &node
 	if !f.Image.IsNull() && !f.Image.IsUnknown() {
 		img := f.Image.ValueString()
 		req.Image = &img
