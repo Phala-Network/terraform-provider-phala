@@ -57,9 +57,9 @@ func (r *appPreflightResource) Schema(_ context.Context, _ resource.SchemaReques
 				Optional:            true,
 				MarkdownDescription: "KMS type for app provisioning. Defaults to phala when omitted.",
 			},
-			"node_id": schema.Int64Attribute{
+			"node": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Optional target node (teepod) ID for placement.",
+				MarkdownDescription: "Physical node name for placement. When omitted, placement is automatic.",
 			},
 			"custom_app_id": schema.StringAttribute{
 				Optional:            true,

@@ -22,6 +22,8 @@ import (
 
 var _ resource.Resource = &appInstanceResource{}
 var _ resource.ResourceWithImportState = &appInstanceResource{}
+var _ resource.ResourceWithUpgradeState = &appInstanceResource{}
+var _ resource.ResourceWithModifyPlan = &appInstanceResource{}
 
 // instanceNamePattern mirrors the cloud-side validation
 // (POST /apps/{app_id}/instances rejects names that fail this check).
@@ -37,7 +39,8 @@ type appInstanceResourceModel struct {
 	ID                types.String `tfsdk:"id"`
 	AppID             types.String `tfsdk:"app_id"`
 	Name              types.String `tfsdk:"name"`
-	NodeID            types.Int64  `tfsdk:"node_id"`
+	LegacyNodeID      types.Int64  `tfsdk:"legacy_node_id"`
+	Node              types.String `tfsdk:"node"`
 	DockerCompose     types.String `tfsdk:"docker_compose"`
 	PreLaunchScript   types.String `tfsdk:"pre_launch_script"`
 	Env               types.Map    `tfsdk:"env"`
@@ -67,6 +70,7 @@ func (r *appInstanceResource) Metadata(_ context.Context, req resource.MetadataR
 
 func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		Version: 1,
 		MarkdownDescription: "Manages a single named CVM instance under an existing phala_app. " +
 			"`name` is the stable logical member key (e.g. `consul-0`, `worker-3`) — it survives CVM " +
 			"replacement and binds the Terraform resource to a durable slot under the app's replica set. " +
@@ -97,12 +101,18 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"node_id": schema.Int64Attribute{
-				Optional: true,
-				MarkdownDescription: "Optional target node (teepod) ID for placement. " +
-					"Changing this forces replacement.",
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.RequiresReplace(),
+			"legacy_node_id": schema.Int64Attribute{
+				Computed:            true,
+				MarkdownDescription: "Internal state migration field for a legacy teepod ID.",
+				PlanModifiers:       []planmodifier.Int64{int64planmodifier.UseStateForUnknown()},
+			},
+			"node": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Physical node name for placement. When omitted on creation, placement is automatic. Omitting it later retains the stored placement. Changing the name forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"docker_compose": schema.StringAttribute{
@@ -248,6 +258,26 @@ func (r *appInstanceResource) Schema(_ context.Context, _ resource.SchemaRequest
 	}
 }
 
+func (r *appInstanceResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+		return
+	}
+	if legacyPlacementPending(ctx, req.State, &resp.Diagnostics) {
+		return
+	}
+	var managed types.Bool
+	var previousNode, plannedNode types.String
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("managed"), &managed)...)
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("node"), &previousNode)...)
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("node"), &plannedNode)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if !managed.IsNull() && !managed.IsUnknown() && !managed.ValueBool() && !plannedNode.IsUnknown() && !previousNode.Equal(plannedNode) {
+		resp.Diagnostics.AddAttributeError(path.Root("node"), "Cannot change adopted instance placement", "This instance is owned by the parent app. Replacing the Terraform resource cannot move the adopted CVM; manage its placement through the parent app.")
+	}
+}
+
 func (r *appInstanceResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
@@ -267,6 +297,16 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 	var plan appInstanceResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if plan.Node.IsUnknown() {
+		plan.Node = types.StringNull()
+	}
+	if plan.LegacyNodeID.IsUnknown() {
+		plan.LegacyNodeID = types.Int64Null()
+	}
+	if !plan.Node.IsNull() && strings.TrimSpace(plan.Node.ValueString()) == "" {
+		resp.Diagnostics.AddAttributeError(path.Root("node"), "Invalid node", "node must be a non-empty physical node name.")
 		return
 	}
 
@@ -324,6 +364,7 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 			return
 		}
 		merged := existing
+		placement := existing
 		if shouldWait(plan.WaitForReady) {
 			ready, err := r.waitForInstanceRunning(ctx, appID, name, deadline)
 			if err != nil {
@@ -331,6 +372,17 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 				return
 			}
 			merged = mergeCVMResponse(existing, ready)
+			placement = ready
+		}
+		if !plan.Node.IsNull() {
+			if placement.NodeInfo == nil || placement.NodeInfo.Name == nil || strings.TrimSpace(*placement.NodeInfo.Name) == "" {
+				resp.Diagnostics.AddAttributeError(path.Root("node"), "Cannot verify adopted instance placement", "The existing instance does not report a physical node name. Its placement cannot be verified, so it cannot be adopted with an explicit node.")
+				return
+			}
+			if *placement.NodeInfo.Name != plan.Node.ValueString() {
+				resp.Diagnostics.AddAttributeError(path.Root("node"), "Adopted instance is on a different node", "The existing instance is on physical node "+*placement.NodeInfo.Name+". Adopting it does not move it; choose its current node or manage placement through the parent app.")
+				return
+			}
 		}
 		populateAppInstanceState(&plan, appID, name, merged)
 		plan.Managed = types.BoolValue(false)
@@ -339,14 +391,9 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 	}
 
 	body := &phala.CreateAppInstanceRequest{Name: &name}
-	if !plan.NodeID.IsNull() && !plan.NodeID.IsUnknown() {
-		v := plan.NodeID.ValueInt64()
-		if v <= 0 {
-			resp.Diagnostics.AddAttributeError(path.Root("node_id"), "Invalid node_id", "node_id must be greater than 0.")
-			return
-		}
-		nodeID := int(v)
-		body.NodeID = &nodeID
+	if !plan.Node.IsNull() && !plan.Node.IsUnknown() {
+		node := plan.Node.ValueString()
+		body.Node = &node
 	}
 	if !plan.DockerCompose.IsNull() && !plan.DockerCompose.IsUnknown() {
 		v := plan.DockerCompose.ValueString()
@@ -433,13 +480,17 @@ func (r *appInstanceResource) Read(ctx context.Context, req resource.ReadRequest
 	appID := ensureAppPrefix(strings.TrimSpace(state.AppID.ValueString()))
 	name := strings.TrimSpace(state.Name.ValueString())
 	if appID == "" || name == "" {
+		if !state.LegacyNodeID.IsNull() {
+			resp.Diagnostics.AddError("Cannot migrate node placement", "The legacy state has no app ID or instance name, so its placement cannot be resolved.")
+			return
+		}
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
 	cvms, err := r.fetchAppCVMs(ctx, appID)
 	if err != nil {
-		if isNotFound(err) {
+		if isNotFound(err) && state.LegacyNodeID.IsNull() {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -449,10 +500,17 @@ func (r *appInstanceResource) Read(ctx context.Context, req resource.ReadRequest
 
 	match := findInstanceByName(cvms, name)
 	if match == nil {
+		if !state.LegacyNodeID.IsNull() {
+			resp.Diagnostics.AddError("Cannot migrate node placement", "The instance was not found, so its legacy teepod ID cannot be resolved.")
+			return
+		}
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
+	if !migrateLegacyNode(&state.LegacyNodeID, &state.Node, []phala.CVMInfo{*match}, &resp.Diagnostics) {
+		return
+	}
 	populateAppInstanceState(&state, appID, name, *match)
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
@@ -610,7 +668,8 @@ func (r *appInstanceResource) Update(ctx context.Context, req resource.UpdateReq
 		refreshed.Managed = state.Managed
 		refreshed.WaitForReady = plan.WaitForReady
 		refreshed.WaitTimeoutSecond = plan.WaitTimeoutSecond
-		refreshed.NodeID = plan.NodeID
+		refreshed.LegacyNodeID = plan.LegacyNodeID
+		refreshed.Node = plan.Node
 		refreshed.DockerCompose = plan.DockerCompose
 		refreshed.PreLaunchScript = plan.PreLaunchScript
 		plan = refreshed

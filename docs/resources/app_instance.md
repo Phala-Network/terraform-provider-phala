@@ -146,10 +146,12 @@ The gateway suffix is shared across every slot in an app, so reading it from any
 
 - The Terraform ID is `<app_id>:<name>`. Import via
   `terraform import phala_app_instance.foo app_abcdef...:consul-1`.
-- `name`, `app_id`, and the optional override fields (`node_id`,
-  `docker_compose`, `pre_launch_script`, `env`, `encrypted_env`, `compose_hash`)
-  all force replacement. Compose / env updates that should apply across the
-  whole replica set must go through `phala_app`.
+- Changing `name`, `app_id`, `node`, or `compose_hash` forces replacement for
+  managed instances. Compose and environment updates that should apply across
+  the whole replica set must go through `phala_app`.
+- An adopted instance stays owned by `phala_app`. An explicit `node` must match
+  the physical node reported by the existing CVM. Adoption does not move it,
+  and changing `node` on an adopted instance is rejected at plan time.
 - `phala_app_instance.env` only supplies encrypted values for the new instance.
   The env keys must already be allowed by the app compose, usually by declaring
   the same keys on `phala_app.env` for the bootstrap slot.
@@ -179,7 +181,7 @@ The gateway suffix is shared across every slot in an app, so reading it from any
 - `docker_compose` (String) Optional override Docker Compose YAML for this instance. When omitted, the backend uses the app's template instance. Updated in place on the slot's CVM (via `PATCH /cvms/{uuid}/docker-compose`); `vm_uuid` is preserved. Only mutable on managed instances; adopted slots reject per-instance overrides.
 - `encrypted_env` (String, Sensitive) Optional hex-encoded pre-encrypted env payload — the manual alternative to `env` (mutually exclusive with it). Updated in place on the slot's CVM via the same `PATCH /cvms/{uuid}/envs` as `env`, preserving `vm_uuid`. Only mutable on managed instances; adopted slots reject per-instance overrides.
 - `env` (Map of String, Sensitive) Plaintext env vars for this instance. Values are encrypted before API submission, but plaintext is stored in Terraform state. Updated in place on the slot's CVM (via `PATCH /cvms/{uuid}/envs`) — the `vm_uuid` is preserved, mirroring `phala_app.env`. The parent app compose must already allow these env keys. Only settable on instances created by this resource (`managed = true`); adopted bootstrap slots reject per-instance env.
-- `node_id` (Number) Optional target node (teepod) ID for placement. Changing this forces replacement.
+- `node` (String) Physical node name for placement. When omitted on creation, placement is automatic. Omitting it later retains the stored placement. Changing the name forces replacement.
 - `pre_launch_script` (String) Optional pre-launch script content. Updated in place on the slot's CVM (via `PATCH /cvms/{uuid}/pre-launch-script`); `vm_uuid` is preserved. Only mutable on managed instances; adopted slots reject per-instance overrides.
 - `wait_for_ready` (Boolean) Wait until the new instance reports `running` before returning.
 - `wait_timeout_seconds` (Number) Wait timeout for create / wait-for-ready, in seconds.
@@ -193,6 +195,7 @@ The gateway suffix is shared across every slot in an app, so reading it from any
 - `id` (String) Terraform ID. Format: `<app_id>:<name>`.
 - `instance_id` (String) Runtime/network identity reported by the cloud.
 - `instance_type` (String) Instance type (e.g. `tdx.small`) of the underlying CVM.
+- `legacy_node_id` (Number) Internal state migration field for a legacy teepod ID.
 - `managed` (Boolean) Whether this resource created the underlying CVM (true) or adopted an existing one — typically the bootstrap CVM owned by `phala_app` when `phala_app.name` matches this resource's `name` (false). Adopted instances skip the API delete call on destroy; the parent `phala_app` owns the CVM lifecycle.
 - `region` (String) Region of the CVM currently occupying this slot.
 - `status` (String) Current CVM status.
