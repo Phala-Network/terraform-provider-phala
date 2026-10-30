@@ -26,6 +26,7 @@ type nodesDataSourceModel struct {
 
 type nodeDataSourceRow struct {
 	NodeID            types.Int64   `tfsdk:"node_id"`
+	Node              types.String  `tfsdk:"node"`
 	Name              types.String  `tfsdk:"name"`
 	Region            types.String  `tfsdk:"region"`
 	Listed            types.Bool    `tfsdk:"listed"`
@@ -61,10 +62,11 @@ func (d *nodesDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, 
 			},
 			"nodes": schema.ListNestedAttribute{
 				Computed:            true,
-				MarkdownDescription: "Available nodes for placement (`node_id` maps to resource `node_id`).",
+				MarkdownDescription: "Available nodes for placement (`node` is the physical node name for app creation).",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"node_id":             schema.Int64Attribute{Computed: true},
+						"node":                schema.StringAttribute{Computed: true},
 						"name":                schema.StringAttribute{Computed: true},
 						"region":              schema.StringAttribute{Computed: true},
 						"listed":              schema.BoolAttribute{Computed: true},
@@ -178,6 +180,7 @@ func (d *nodesDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 
 		rows = append(rows, nodeDataSourceRow{
 			NodeID:            types.Int64Value(nodeID),
+			Node:              nullableStringPtr(node.Node),
 			Name:              nullableString(node.Name),
 			Region:            nullableString(region),
 			Listed:            types.BoolValue(node.Listed),

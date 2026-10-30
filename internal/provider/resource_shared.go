@@ -63,10 +63,15 @@ func sharedCVMSchemaAttrs() map[string]schema.Attribute {
 				stringplanmodifier.RequiresReplace(),
 			},
 		},
+		"node": schema.StringAttribute{
+			Optional:            true,
+			MarkdownDescription: "Physical node name for initial placement. Changing this forces replacement.",
+			PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+		},
 		"node_id": schema.Int64Attribute{
-			Optional: true,
-			MarkdownDescription: "Optional target node (teepod) ID for initial placement. " +
-				"Changing this forces replacement.",
+			Optional:            true,
+			DeprecationMessage:  "Legacy state only. Use node for new apps; migration of existing state is not yet supported.",
+			MarkdownDescription: "Legacy teepod ID retained for existing state. Do not change it until state migration is supported.",
 			PlanModifiers: []planmodifier.Int64{
 				int64planmodifier.RequiresReplace(),
 			},
@@ -275,8 +280,7 @@ type provisionFields struct {
 	KMS            string
 	Listed         bool
 	Region         types.String
-	NodeID         int64
-	HasNodeID      bool
+	Node           types.String
 	Image          types.String
 	CustomAppID    string
 	HasCustomAppID bool
@@ -338,10 +342,11 @@ func buildProvisionReq(f provisionFields) (*phala.ProvisionCVMRequest, error) {
 		region := f.Region.ValueString()
 		req.Region = &region
 	}
-	if f.HasNodeID {
-		teepodID := int(f.NodeID)
-		req.TeepodID = &teepodID
+	if f.Node.IsNull() || f.Node.IsUnknown() || strings.TrimSpace(f.Node.ValueString()) == "" {
+		return nil, fmt.Errorf("node must be a non-empty physical node name")
 	}
+	node := f.Node.ValueString()
+	req.Node = &node
 	if !f.Image.IsNull() && !f.Image.IsUnknown() {
 		img := f.Image.ValueString()
 		req.Image = &img
@@ -375,15 +380,10 @@ func commitAndCreate(
 	hasEncryptedEnv bool,
 	envKeys []string,
 ) (*commitCreateResult, error) {
-	commitReq := &phala.CommitCVMProvisionRequest{
-		AppID:       provResp.AppID,
-		ComposeHash: provResp.ComposeHash,
+	if strings.TrimSpace(provResp.Token) == "" {
+		return nil, fmt.Errorf("provision response did not include a commit token")
 	}
-	// Same-path two-phase create: prefer the one-time commit token when the
-	// backend issued one; app_id + compose_hash remain as the legacy fallback.
-	if provResp.Token != "" {
-		commitReq.Token = &provResp.Token
-	}
+	commitReq := &phala.CommitCVMProvisionRequest{Token: &provResp.Token}
 	if hasEncryptedEnv {
 		commitReq.EncryptedEnv = &encryptedEnv
 	}

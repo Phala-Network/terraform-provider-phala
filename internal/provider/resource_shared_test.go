@@ -2,7 +2,12 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -119,8 +124,73 @@ func TestBuildComposeFileUpdateRequest(t *testing.T) {
 	}
 }
 
+func TestCreateNodeAndToken(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/cvms" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if calls == 0 {
+			if string(body["node"]) != `"physical-node"` {
+				t.Errorf("node = %s", body["node"])
+			}
+			for _, key := range []string{"node_id", "teepod_id"} {
+				if _, ok := body[key]; ok {
+					t.Errorf("unexpected %s", key)
+				}
+			}
+			_, _ = w.Write([]byte(`{"app_id":"app_test","compose_hash":"hash","token":"token"}`))
+		} else {
+			if string(body["token"]) != `"token"` {
+				t.Errorf("token = %s", body["token"])
+			}
+			_, _ = w.Write([]byte(`{"id":"cvm_test"}`))
+		}
+		calls++
+	}))
+	defer server.Close()
+	client, err := phala.NewClient(phala.WithAPIKey("test"), phala.WithBaseURL(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := buildProvisionReq(provisionFields{Node: types.StringValue("physical-node")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := client.ProvisionCVM(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := commitAndCreate(context.Background(), client, prepared, "", false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d", calls)
+	}
+}
+
+func TestCommitCreateRequiresToken(t *testing.T) {
+	_, err := commitAndCreate(context.Background(), nil, &phala.ProvisionCVMResponse{}, "", false, nil)
+	if err == nil {
+		t.Fatal("expected missing token error")
+	}
+}
+
 func TestBuildProvisionReq(t *testing.T) {
 	t.Parallel()
+
+	t.Run("missing node", func(t *testing.T) {
+		for _, node := range []types.String{types.StringNull(), types.StringUnknown(), types.StringValue("  ")} {
+			if _, err := buildProvisionReq(provisionFields{Node: node}); err == nil {
+				t.Errorf("expected an error for node %v", node)
+			}
+		}
+	})
 
 	t.Run("minimal", func(t *testing.T) {
 		req, err := buildProvisionReq(provisionFields{
@@ -130,6 +200,7 @@ func TestBuildProvisionReq(t *testing.T) {
 			KMS:         "phala",
 			Listed:      false,
 			Region:      types.StringNull(),
+			Node:        types.StringValue("physical-node"),
 			Image:       types.StringNull(),
 			DiskSize:    types.Int64Null(),
 		})
@@ -145,8 +216,8 @@ func TestBuildProvisionReq(t *testing.T) {
 		if req.KMSType == nil || *req.KMSType != "PHALA" {
 			t.Errorf("kms = %v", req.KMSType)
 		}
-		if req.TeepodID != nil {
-			t.Error("teepod_id should not be set when HasNodeID is false")
+		if req.Node == nil || *req.Node != "physical-node" {
+			t.Errorf("node = %v", req.Node)
 		}
 	})
 
@@ -158,8 +229,7 @@ func TestBuildProvisionReq(t *testing.T) {
 			KMS:            "ethereum",
 			Listed:         true,
 			Region:         types.StringValue("us-east"),
-			NodeID:         42,
-			HasNodeID:      true,
+			Node:           types.StringValue("physical-node"),
 			Image:          types.StringValue("dstack-v0.3.5"),
 			CustomAppID:    "custom123",
 			HasCustomAppID: true,
@@ -170,8 +240,8 @@ func TestBuildProvisionReq(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if req.TeepodID == nil || *req.TeepodID != 42 {
-			t.Errorf("teepod_id = %v", req.TeepodID)
+		if req.Node == nil || *req.Node != "physical-node" {
+			t.Errorf("node = %v", req.Node)
 		}
 		if req.KMSType == nil || *req.KMSType != "ETHEREUM" {
 			t.Errorf("kms = %v", req.KMSType)

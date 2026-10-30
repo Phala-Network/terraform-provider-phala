@@ -26,7 +26,7 @@ type appPreflightDataSourceModel struct {
 	Size            types.String `tfsdk:"size"`
 	Image           types.String `tfsdk:"image"`
 	KMS             types.String `tfsdk:"kms"`
-	NodeID          types.Int64  `tfsdk:"node_id"`
+	Node            types.String `tfsdk:"node"`
 	CustomAppID     types.String `tfsdk:"custom_app_id"`
 	Nonce           types.Int64  `tfsdk:"nonce"`
 	PublicLogs      types.Bool   `tfsdk:"public_logs"`
@@ -91,9 +91,9 @@ func (d *appPreflightDataSource) Schema(_ context.Context, _ datasource.SchemaRe
 				Optional:            true,
 				MarkdownDescription: "KMS type for app provisioning. Defaults to phala when omitted.",
 			},
-			"node_id": schema.Int64Attribute{
-				Optional:            true,
-				MarkdownDescription: "Optional target node (teepod) ID for placement.",
+			"node": schema.StringAttribute{
+				Required:            true,
+				MarkdownDescription: "Physical node name for placement.",
 			},
 			"custom_app_id": schema.StringAttribute{
 				Optional:            true,
@@ -309,12 +309,6 @@ func buildAppPreflightProvisionReq(ctx context.Context, config appPreflightDataS
 	identity, identityDiags := resolveProvisionIdentity(config.KMS, config.CustomAppID, config.Nonce)
 	diags.Append(identityDiags...)
 
-	nodeID, hasNodeID, nodeDiags := knownOptionalInt64(config.NodeID, "node_id")
-	diags.Append(nodeDiags...)
-	if hasNodeID && nodeID <= 0 {
-		diags.AddError("Invalid node_id", "node_id must be greater than 0.")
-	}
-
 	envKeys, hasEnvKeys, envDiags := composeEnvKeysFromAttrs(ctx, config.Env, config.EnvKeys)
 	diags.Append(envDiags...)
 
@@ -345,8 +339,7 @@ func buildAppPreflightProvisionReq(ctx context.Context, config appPreflightDataS
 		KMS:            identity.KMSType,
 		Listed:         listed,
 		Region:         config.Region,
-		NodeID:         nodeID,
-		HasNodeID:      hasNodeID,
+		Node:           config.Node,
 		Image:          config.Image,
 		CustomAppID:    identity.CustomAppID,
 		HasCustomAppID: identity.HasCustomAppID,

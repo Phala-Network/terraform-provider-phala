@@ -37,6 +37,7 @@ type appResourceModel struct {
 	Image               types.String `tfsdk:"image"`
 	KMS                 types.String `tfsdk:"kms"`
 	NodeID              types.Int64  `tfsdk:"node_id"`
+	Node                types.String `tfsdk:"node"`
 	CustomAppID         types.String `tfsdk:"custom_app_id"`
 	Nonce               types.Int64  `tfsdk:"nonce"`
 	PublicLogs          types.Bool   `tfsdk:"public_logs"`
@@ -251,6 +252,19 @@ func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 		return
 	}
 
+	var oldNodeID, plannedNodeID types.Int64
+	var plannedNode types.String
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("node_id"), &oldNodeID)...)
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("node_id"), &plannedNodeID)...)
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("node"), &plannedNode)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if !oldNodeID.IsNull() && (!oldNodeID.Equal(plannedNodeID) || !plannedNode.IsNull()) {
+		resp.Diagnostics.AddError("Legacy node placement requires state migration", "This app has a legacy node_id in its state. Migration to a physical node name is not yet supported; do not remove node_id or add node until the state migration is available.")
+		return
+	}
+
 	stateMembers, ok := planMembersFromAttribute(ctx, req.State, &resp.Diagnostics)
 	if !ok {
 		return
@@ -296,10 +310,8 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 
 	identity, diags := resolveProvisionIdentity(plan.KMS, plan.CustomAppID, plan.Nonce)
 	resp.Diagnostics.Append(diags...)
-	nodeID, hasNodeID, diags := knownOptionalInt64(plan.NodeID, "node_id")
-	resp.Diagnostics.Append(diags...)
-	if hasNodeID && nodeID <= 0 {
-		resp.Diagnostics.AddError("Invalid node_id", "node_id must be greater than 0.")
+	if !plan.NodeID.IsNull() {
+		resp.Diagnostics.AddError("Unsupported node_id", "Use node with a physical node name for new apps.")
 	}
 	if resp.Diagnostics.HasError() {
 		return
@@ -332,8 +344,7 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		KMS:            identity.KMSType,
 		Listed:         plan.Listed.ValueBool(),
 		Region:         plan.Region,
-		NodeID:         nodeID,
-		HasNodeID:      hasNodeID,
+		Node:           plan.Node,
 		Image:          plan.Image,
 		CustomAppID:    identity.CustomAppID,
 		HasCustomAppID: identity.HasCustomAppID,
