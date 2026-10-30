@@ -22,7 +22,7 @@ func TestBuildAppPreflightProvisionReq(t *testing.T) {
 		Region:          types.StringValue("US-WEST-1"),
 		Image:           types.StringValue("dstack-dev-0.5.9"),
 		KMS:             types.StringValue("phala"),
-		NodeID:          types.Int64Value(42),
+		Node:            types.StringValue("physical-node"),
 		DockerCompose:   types.StringValue("services:\n  app:\n"),
 		PreLaunchScript: types.StringValue("#!/bin/sh\necho ready\n"),
 		PublicLogs:      types.BoolValue(true),
@@ -48,8 +48,8 @@ func TestBuildAppPreflightProvisionReq(t *testing.T) {
 	if req.Image == nil || *req.Image != "dstack-dev-0.5.9" {
 		t.Fatalf("missing image: %#v", req.Image)
 	}
-	if req.TeepodID == nil || *req.TeepodID != 42 {
-		t.Fatalf("missing teepod_id: %#v", req.TeepodID)
+	if req.Node == nil || *req.Node != "physical-node" {
+		t.Fatalf("missing physical node: %#v", req.Node)
 	}
 	if req.DiskSize == nil || *req.DiskSize != 20 {
 		t.Fatalf("missing disk_size: %#v", req.DiskSize)
@@ -98,6 +98,7 @@ func TestBuildAppPreflightProvisionReqDefaults(t *testing.T) {
 	req, diags := buildAppPreflightProvisionReq(context.Background(), appPreflightDataSourceModel{
 		Name:          types.StringValue("demo"),
 		Size:          types.StringValue("tdx.small"),
+		Node:          types.StringValue("physical-node"),
 		DockerCompose: types.StringValue("services:\n  app:\n"),
 	})
 	if diags.HasError() {
