@@ -19,6 +19,11 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
+const (
+	generatedLaunchToken = "generated-launch-token-0123456789abcdef"
+	explicitLaunchToken  = "explicit-launch-token-0123456789abcdef01"
+)
+
 // composeConfigAPI is a mock Phala Cloud API that records every write.
 type composeConfigAPI struct {
 	t        *testing.T
@@ -93,7 +98,16 @@ func (a *composeConfigAPI) handle(w http.ResponseWriter, r *http.Request) {
 			writeJSON(t, w, http.StatusOK, `{"app_id":"app_test","compose_hash":"abc","app_env_encrypt_pubkey":"`+envUpdateTestPubkey+`","token":"tok_test"}`)
 			return
 		}
-		writeJSON(t, w, http.StatusOK, `{"id":"cvm123","name":"demo","status":"starting"}`)
+		token := ""
+		if provision := a.bodies["POST /cvms (provision)"]; provision != nil && provision["generate_launch_token"] == true {
+			token = generatedLaunchToken
+		}
+		writeJSON(t, w, http.StatusOK, `{"id":"cvm123","name":"demo","status":"starting","launch_token":"`+token+`"}`)
+	case r.Method == http.MethodPost && path == "/apps/test/launch-token":
+		token, _ := body["launch_token"].(string)
+		writeJSON(t, w, http.StatusOK, `{"launch_token":"`+token+`","launch_token_hash":"hash-of-`+token+`"}`)
+	case r.Method == http.MethodDelete && path == "/apps/test/launch-token":
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPatch && path == "/cvms/cvm123":
 		writeJSON(t, w, http.StatusAccepted, `{"status":"accepted","correlation_id":"c1"}`)
 	case r.Method == http.MethodPut && path == "/cvms/cvm123/annotations":
@@ -405,6 +419,61 @@ func TestAppResourceAnnotations(t *testing.T) {
 	assertJSONEqual(t, "removal body", bodies["PUT /cvms/cvm123/annotations"], `{"annotations":{}}`)
 }
 
+// TestAppResourceLaunchToken creates an app with a generated launch token,
+// rotates it to an explicit one and removes it. A rotation sets the token on
+// the app before the compose carries its hash; a removal drops the hash from
+// the compose before the token is cleared.
+func TestAppResourceLaunchToken(t *testing.T) {
+	api := newComposeConfigAPI(t)
+	h := newAppHarness(t, api.server.URL)
+	generateConfig := h.composeConfigApp(map[string]tftypes.Value{
+		"generate_launch_token": tftypes.NewValue(tftypes.Bool, true),
+	})
+
+	created := h.apply(nil, generateConfig)
+	_, bodies := api.take()
+	provision := bodies["POST /cvms (provision)"]
+	if provision["generate_launch_token"] != true || provision["launch_token"] != nil {
+		t.Fatalf("launch token request = %v / %v", provision["generate_launch_token"], provision["launch_token"])
+	}
+	var token string
+	if err := h.attr(created, "launch_token").As(&token); err != nil || token != generatedLaunchToken {
+		t.Fatalf("launch_token = %q (%v), want the generated token", token, err)
+	}
+
+	// The generated token is kept while generate_launch_token stays on.
+	noop := h.plan(created, generateConfig)
+	plannedNoop, _ := noop.PlannedState.Unmarshal(h.objType)
+	createdValue, _ := created.Unmarshal(h.objType)
+	if !plannedNoop.Equal(createdValue) {
+		t.Fatalf("unchanged config plans a change:\n%s\n%s", plannedNoop, createdValue)
+	}
+
+	rotated := h.apply(created, h.composeConfigApp(map[string]tftypes.Value{
+		"launch_token": tftypes.NewValue(tftypes.String, explicitLaunchToken),
+	}))
+	writes, bodies := api.take()
+	if !reflect.DeepEqual(writes, []string{"POST /apps/test/launch-token", "PATCH /cvms/cvm123"}) {
+		t.Fatalf("rotation writes = %v", writes)
+	}
+	assertJSONEqual(t, "launch-token body", bodies["POST /apps/test/launch-token"], `{"launch_token":"`+explicitLaunchToken+`"}`)
+	assertJSONEqual(t, "rotation PATCH body", bodies["PATCH /cvms/cvm123"],
+		`{"compose":{"requirements":{"launch_token_hash":"hash-of-`+explicitLaunchToken+`"}}}`)
+	if err := h.attr(rotated, "launch_token").As(&token); err != nil || token != explicitLaunchToken {
+		t.Fatalf("launch_token = %q (%v), want the explicit token", token, err)
+	}
+
+	removed := h.apply(rotated, h.composeConfigApp(nil))
+	writes, bodies = api.take()
+	if !reflect.DeepEqual(writes, []string{"PATCH /cvms/cvm123", "DELETE /apps/test/launch-token"}) {
+		t.Fatalf("removal writes = %v", writes)
+	}
+	assertJSONEqual(t, "removal PATCH body", bodies["PATCH /cvms/cvm123"], `{"compose":{"requirements":{"launch_token_hash":null}}}`)
+	if !h.attr(removed, "launch_token").IsNull() {
+		t.Fatal("launch_token must be null after removal")
+	}
+}
+
 // TestAppResourceComposeConfigForceNew asserts that exactly the settings the
 // backend cannot update (runner, bash_script, requirements.gpu_policy) plan a
 // replacement, and that the other compose settings update in place.
@@ -433,6 +502,7 @@ func TestAppResourceComposeConfigForceNew(t *testing.T) {
 		{"event_log_version", tftypes.NewValue(tftypes.Number, 2), false},
 		{"init_scripts", stringSet("docker_cleanup"), false},
 		{"annotations", stringMap(map[string]string{"k": "v"}), false},
+		{"launch_token", tftypes.NewValue(tftypes.String, explicitLaunchToken), false},
 	} {
 		planned := h.plan(created, h.composeConfigApp(map[string]tftypes.Value{tc.attr: tc.value}))
 		got := len(planned.RequiresReplace) > 0

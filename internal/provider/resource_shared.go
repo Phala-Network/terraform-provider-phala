@@ -360,6 +360,8 @@ func buildProvisionReq(f provisionFields) (*phala.ProvisionCVMRequest, error) {
 type commitCreateResult struct {
 	AppID  string
 	VMUUID string
+	// LaunchToken is the app launch token the create stored, returned once.
+	LaunchToken string
 }
 
 // commitAndCreate calls POST /cvms to finalize a provision request.
@@ -388,8 +390,9 @@ func commitAndCreate(
 		return nil, err
 	}
 	return &commitCreateResult{
-		AppID:  provResp.AppID,
-		VMUUID: createResp.CvmID(),
+		AppID:       provResp.AppID,
+		VMUUID:      createResp.CvmID(),
+		LaunchToken: createResp.LaunchToken,
 	}, nil
 }
 

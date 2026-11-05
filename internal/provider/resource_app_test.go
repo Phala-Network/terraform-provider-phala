@@ -777,6 +777,7 @@ func TestComposeHashInputsChanged(t *testing.T) {
 			SecureTime:     types.BoolValue(false),
 			EnvKeys:        types.ListValueMust(types.StringType, []attr.Value{types.StringValue("A")}),
 			InitScripts:    types.SetNull(types.StringType),
+			LaunchToken:    types.StringValue("existing-launch-token-of-at-least-32-bytes"),
 		}
 	}
 	for _, tc := range []struct {
@@ -826,6 +827,10 @@ func TestComposeHashInputsChanged(t *testing.T) {
 		{"init scripts", func(m *appResourceModel) {
 			m.InitScripts = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("docker_cleanup")})
 		}, nil, true},
+		{"launch token generated", func(m *appResourceModel) { m.LaunchToken = types.StringUnknown() }, func(m *appResourceModel) {
+			m.LaunchToken = types.StringNull()
+		}, true},
+		{"launch token removed", func(m *appResourceModel) { m.LaunchToken = types.StringNull() }, nil, true},
 		{"annotations only", func(m *appResourceModel) {
 			m.Annotations = types.MapValueMust(types.StringType, map[string]attr.Value{"tier": types.StringValue("fast")})
 		}, nil, false},

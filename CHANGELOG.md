@@ -10,6 +10,8 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 - `phala_app.annotations` sets host-side CVM annotations (needs the `cvm_annotations` feature flag). Changes replace the whole map on every CVM of the app without a restart.
 
+- `phala_app.launch_token` gates every CVM of the app with a launch token that you supply, or that Phala Cloud generates with `generate_launch_token = true`. The token is stored in state as a sensitive value. Changing it rotates the token and updates each CVM's `requirements.launch_token_hash`; removing it removes the hash, then the token.
+
 - Add `phala_cvm_env` to configure encrypted environment values after CVM identity allocation, including bootstrap CVMs. Declare the measured key allowlist separately with `phala_app.env_keys` to avoid self-referential deployment cycles in one normal apply.
 
 - `phala_app_instance.wait_for_identity` waits for an instance-pinned endpoint identity without waiting for the full CVM boot, allowing dependent CVMs to launch concurrently.

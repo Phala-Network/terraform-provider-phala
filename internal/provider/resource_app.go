@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -80,6 +81,8 @@ type appResourceModel struct {
 	InitScripts         types.Set    `tfsdk:"init_scripts"`
 	ConfirmDataWipe     types.Bool   `tfsdk:"confirm_data_wipe"`
 	Annotations         types.Map    `tfsdk:"annotations"`
+	LaunchToken         types.String `tfsdk:"launch_token"`
+	GenerateLaunchToken types.Bool   `tfsdk:"generate_launch_token"`
 }
 
 type appInstanceModel struct {
@@ -268,8 +271,13 @@ func (r *appResource) ValidateConfig(ctx context.Context, req resource.ValidateC
 // ModifyPlan protects members-mode ownership and invalidates compose_hash
 // when a measured input changes or is explicitly unknown in configuration.
 func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	// Skip on create (no prior state) and destroy (no plan).
-	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+	// Skip destroy (no plan).
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	resp.Diagnostics.Append(planLaunchToken(ctx, req.Config, req.State, &resp.Plan)...)
+	// The rest compares against prior state, which a create does not have.
+	if req.State.Raw.IsNull() || resp.Diagnostics.HasError() {
 		return
 	}
 
@@ -308,7 +316,7 @@ func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 	}
 
 	var plan, state, config appResourceModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(resp.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
@@ -360,6 +368,36 @@ func composeHashInputsChanged(ctx context.Context, plan, state, config appResour
 		return true, diags
 	}
 	return planKeysKnown && !equalStringSlices(planKeys, stateKeys), diags
+}
+
+// planLaunchToken plans the computed launch_token. A configured token is
+// planned as configured. A generated token keeps its state value, is unknown
+// until Phala Cloud generates it, and is null when no token is wanted.
+func planLaunchToken(ctx context.Context, config tfsdk.Config, state tfsdk.State, plan *tfsdk.Plan) diag.Diagnostics {
+	var diags diag.Diagnostics
+	var configured types.String
+	var generate types.Bool
+	diags.Append(config.GetAttribute(ctx, path.Root("launch_token"), &configured)...)
+	diags.Append(config.GetAttribute(ctx, path.Root("generate_launch_token"), &generate)...)
+	if diags.HasError() || !configured.IsNull() {
+		return diags
+	}
+	planned := types.StringNull()
+	switch {
+	case generate.IsUnknown():
+		planned = types.StringUnknown()
+	case generate.ValueBool():
+		prior := types.StringNull()
+		if !state.Raw.IsNull() {
+			diags.Append(state.GetAttribute(ctx, path.Root("launch_token"), &prior)...)
+		}
+		planned = prior
+		if prior.IsNull() {
+			planned = types.StringUnknown()
+		}
+	}
+	diags.Append(plan.SetAttribute(ctx, path.Root("launch_token"), planned)...)
+	return diags
 }
 
 func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -480,6 +518,11 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 	plan.AppID = types.StringValue(appID)
 	plan.ComposeHash = nullableString(provResp.ComposeHash)
 	plan.AppEnvEncryptPubkey = nullableString(provResp.AppEnvEncryptPubkey)
+	if createResp.LaunchToken != "" {
+		plan.LaunchToken = types.StringValue(createResp.LaunchToken)
+	} else if plan.LaunchToken.IsUnknown() {
+		plan.LaunchToken = types.StringNull()
+	}
 
 	fetched, err := r.fetchAppAndCVMs(ctx, appID)
 	if err != nil {
@@ -501,8 +544,8 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
-// applyCreateConfig adds the compose settings, init scripts and annotations
-// to a create request.
+// applyCreateConfig adds the compose settings, init scripts, annotations and
+// launch token to a create request.
 func applyCreateConfig(ctx context.Context, plan appResourceModel, req *phala.ProvisionCVMRequest) diag.Diagnostics {
 	composeCfg, diags := readComposeConfig(ctx, plan)
 	if diags.HasError() {
@@ -511,6 +554,11 @@ func applyCreateConfig(ctx context.Context, plan appResourceModel, req *phala.Pr
 	composeCfg.applyTo(req)
 	if !plan.Annotations.IsNull() {
 		diags.Append(plan.Annotations.ElementsAs(ctx, &req.Annotations, false)...)
+	}
+	if token := stringPtrValue(plan.LaunchToken); token != nil {
+		req.LaunchToken = token
+	} else if plan.GenerateLaunchToken.ValueBool() {
+		req.GenerateLaunchToken = boolPtr(true)
 	}
 	return diags
 }
@@ -619,7 +667,13 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
-	composeReq, composeDiags := buildComposeUpdateRequest(ctx, plan, state, desiredComposeEnvKeys, updateComposeEnvKeys)
+	launchTokenHash, clearLaunchToken, err := updateLaunchToken(ctx, r.client, appID, &plan, state)
+	if err != nil {
+		summary, detail := diagnosticFromAPIError("Failed to set app launch token", err)
+		resp.Diagnostics.AddError(summary, detail)
+		return
+	}
+	composeReq, composeDiags := buildComposeUpdateRequest(ctx, plan, state, desiredComposeEnvKeys, updateComposeEnvKeys, launchTokenHash)
 	resp.Diagnostics.Append(composeDiags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -706,6 +760,15 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		}
 		if err := putAnnotations(ctx, r.client, targets, plan.Annotations); err != nil {
 			summary, detail := diagnosticFromAPIError("Failed to update app annotations", err)
+			resp.Diagnostics.AddError(summary, detail)
+			return
+		}
+	}
+
+	// Each CVM's compose update drops the hash, so the token can go.
+	if clearLaunchToken {
+		if err := r.client.ClearAppLaunchToken(ctx, appIDWithoutPrefix(appID)); err != nil {
+			summary, detail := diagnosticFromAPIError("Failed to clear app launch token", err)
 			resp.Diagnostics.AddError(summary, detail)
 			return
 		}

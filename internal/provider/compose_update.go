@@ -18,6 +18,7 @@ func buildComposeUpdateRequest(
 	plan, state appResourceModel,
 	envKeys []string,
 	updateEnvKeys bool,
+	launchTokenHash phala.Patch[string],
 ) (*phala.PatchCVMRequest, diag.Diagnostics) {
 	desired, diags := readComposeConfig(ctx, plan)
 	current, currentDiags := readComposeConfig(ctx, state)
@@ -57,7 +58,7 @@ func buildComposeUpdateRequest(
 		}
 	}
 
-	patch := composePatchFrom(desired, current)
+	patch := composePatchFrom(desired, current, launchTokenHash)
 	patch.GatewayEnabled = patchOf(boolPtrValue(plan.GatewayEnabled), boolPtrValue(state.GatewayEnabled))
 	patch.SecureTime = patchOf(boolPtrValue(plan.SecureTime), boolPtrValue(state.SecureTime))
 	if !reflect.DeepEqual(patch, phala.ComposePatch{}) {
@@ -91,6 +92,34 @@ func patchCompose(ctx context.Context, client *phala.Client, cvmID string, req *
 		return fmt.Errorf("on-chain KMS compose-hash registration required (HTTP 465); this provider supports kms = phala only for now")
 	}
 	return nil
+}
+
+// updateLaunchToken sets, rotates or generates the app's launch token before
+// the compose update and returns the requirements.launch_token_hash patch for
+// every CVM. clear reports that the token is removed, which happens after the
+// compose update drops the hash.
+func updateLaunchToken(ctx context.Context, client *phala.Client, appID string, plan *appResourceModel, state appResourceModel) (hash phala.Patch[string], clear bool, err error) {
+	var req *phala.SetAppLaunchTokenRequest
+	switch {
+	case plan.LaunchToken.IsNull():
+		if state.LaunchToken.IsNull() {
+			return hash, false, nil
+		}
+		return phala.PatchNull[string](), true, nil
+	case plan.LaunchToken.IsUnknown():
+		// Unknown at apply time means Phala Cloud generates the token.
+	case plan.LaunchToken.Equal(state.LaunchToken):
+		return hash, false, nil
+	default:
+		token := plan.LaunchToken.ValueString()
+		req = &phala.SetAppLaunchTokenRequest{LaunchToken: &token}
+	}
+	resp, err := client.SetAppLaunchToken(ctx, appIDWithoutPrefix(appID), req)
+	if err != nil {
+		return hash, false, err
+	}
+	plan.LaunchToken = types.StringValue(resp.LaunchToken)
+	return phala.PatchValue(resp.LaunchTokenHash), false, nil
 }
 
 // putAnnotations replaces the annotations of each CVM; a null map clears them.

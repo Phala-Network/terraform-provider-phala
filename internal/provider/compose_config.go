@@ -145,6 +145,21 @@ func composeConfigSchemaAttrs() map[string]schema.Attribute {
 				"Updated in place by replacing the whole map, without a restart; host tools that read annotations when the CVM " +
 				"starts see the change after the next restart. Removing the attribute clears the annotations.",
 		},
+		"launch_token": schema.StringAttribute{
+			Optional:  true,
+			Computed:  true,
+			Sensitive: true,
+			MarkdownDescription: "App launch token (at least 32 bytes). Every CVM of the app must present it on boot; the compose carries " +
+				"its hash in `requirements.launch_token_hash`. Set it, or set `generate_launch_token = true` to have Phala Cloud " +
+				"generate one, which is stored here. Phala Cloud and the node operator can read the token, so it only protects " +
+				"against parties who know the public compose. Changing it rotates the token and updates every CVM's compose; " +
+				"removing it removes the hash and then the token.",
+		},
+		"generate_launch_token": schema.BoolAttribute{
+			Optional: true,
+			MarkdownDescription: "Have Phala Cloud generate the launch token when `launch_token` is not set. " +
+				"The generated token is kept until you set `launch_token` or turn this off.",
+		},
 	}
 }
 
@@ -285,7 +300,7 @@ func (c composeConfig) applyTo(req *phala.ProvisionCVMRequest) {
 // composePatchFrom returns the merge patch that turns the current settings into
 // the desired ones. Runner, bash_script and gpu_policy force replacement, so
 // they never reach an update.
-func composePatchFrom(desired, current composeConfig) phala.ComposePatch {
+func composePatchFrom(desired, current composeConfig, launchTokenHash phala.Patch[string]) phala.ComposePatch {
 	patch := phala.ComposePatch{
 		SwapSize:        patchOf(desired.SwapSize, current.SwapSize),
 		StorageDiscard:  patchOf(desired.StorageDiscard, current.StorageDiscard),
@@ -299,7 +314,7 @@ func composePatchFrom(desired, current composeConfig) phala.ComposePatch {
 			patch.PortPolicy = phala.PatchValue(*desired.PortPolicy)
 		}
 	}
-	if req, ok := requirementsPatchFrom(desired.Requirements, current.Requirements); ok {
+	if req, ok := requirementsPatchFrom(desired.Requirements, current.Requirements, launchTokenHash); ok {
 		patch.Requirements = phala.PatchValue(req)
 	}
 	return patch
@@ -307,7 +322,7 @@ func composePatchFrom(desired, current composeConfig) phala.ComposePatch {
 
 // requirementsPatchFrom patches requirements per key, so keys Terraform does
 // not set (the stored gpu_policy, the launch token hash) stay as they are.
-func requirementsPatchFrom(desired, current *phala.ComposeRequirements) (phala.ComposeRequirementsPatch, bool) {
+func requirementsPatchFrom(desired, current *phala.ComposeRequirements, launchTokenHash phala.Patch[string]) (phala.ComposeRequirementsPatch, bool) {
 	if desired == nil {
 		desired = &phala.ComposeRequirements{}
 	}
@@ -319,6 +334,7 @@ func requirementsPatchFrom(desired, current *phala.ComposeRequirements) (phala.C
 		HealthCheck:          patchOf(desired.HealthCheck, current.HealthCheck),
 		HealthStatusFile:     patchOf(desired.HealthStatusFile, current.HealthStatusFile),
 		TDXMeasureACPITables: patchOf(desired.TDXMeasureACPITables, current.TDXMeasureACPITables),
+		LaunchTokenHash:      launchTokenHash,
 	}
 	if !reflect.DeepEqual(desired.Platforms, current.Platforms) {
 		if desired.Platforms == nil {
@@ -341,6 +357,7 @@ func composeConfigChanged(plan, state, config appResourceModel) bool {
 		{config.EventLogVersion, plan.EventLogVersion, state.EventLogVersion},
 		{config.Requirements, plan.Requirements, state.Requirements},
 		{config.InitScripts, plan.InitScripts, state.InitScripts},
+		{config.LaunchToken, plan.LaunchToken, state.LaunchToken},
 	}
 	for _, p := range pairs {
 		if p[0].IsUnknown() || p[1].IsUnknown() || !p[1].Equal(p[2]) {

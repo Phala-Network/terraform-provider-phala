@@ -70,19 +70,20 @@ Downstream `phala_app_instance` resources should set `for_each = toset(phala_app
 
 `phala_app.Update` propagates mutable-field changes across every CVM in a members-mode app while preserving slot identity (`vm_uuid` and `name` are unchanged):
 
-- **Compose changes** (`docker_compose`, `pre_launch_script`, `public_*`, `gateway_enabled`, `secure_time`, env-key list changes, the compose settings below, `init_scripts`) go through the cloud's app-revision endpoint. The provider applies them to the bootstrap CVM with one `PATCH /cvms/{id}` that sends only the changed keys (creating a new revision row), then `POST /apps/{id}/revisions/{rev}/redeploy` fans the same revision out to every other slot. Each CVM's `compose_hash` flips to the new value; nothing is destroyed and recreated.
+- **Compose changes** (`docker_compose`, `pre_launch_script`, `public_*`, `gateway_enabled`, `secure_time`, env-key list changes, the compose settings below, `init_scripts`, the launch token hash) go through the cloud's app-revision endpoint. The provider applies them to the bootstrap CVM with one `PATCH /cvms/{id}` that sends only the changed keys (creating a new revision row), then `POST /apps/{id}/revisions/{rev}/redeploy` fans the same revision out to every other slot. Each CVM's `compose_hash` flips to the new value; nothing is destroyed and recreated.
 - **Env value changes** use a per-CVM `PATCH /cvms/{uuid}/envs` fan-out by default. Set `env_update_scope = "bootstrap"` when `phala_app_instance` resources own the other slots' environments. The parent then updates only its bootstrap CVM and leaves per-slot values intact. `compose_hash` stays unchanged.
 - **OS image, instance size, and disk size changes** fan out via `PATCH /cvms/{uuid}/os-image` and `PATCH /cvms/{uuid}/resources` respectively — the cloud has no app-level analog. Sequential, fail-fast.
 
 The one structural change still blocked is **removing the `members` attribute** from a previously-members-mode app: that would leave the `phala_app_instance` slots orphaned. The provider blocks this at plan time and asks you to destroy and recreate.
 
-## Compose settings, init scripts and annotations
+## Compose settings, init scripts, annotations and launch token
 
 - Every compose change of one apply is sent as a single `PATCH /cvms/{id}` whose `compose` object is a JSON Merge Patch: only changed keys are sent, a removed attribute is sent as `null`, and compose keys the provider does not manage stay as they are.
 - `runner`, `bash_script` and `requirements.gpu_policy` cannot be changed after create; changing them replaces the app. `storage_fs` was already force-new.
 - `port_policy`, `swap_size`, `storage_discard`, `snapshotter`, `event_log_version`, `gateway_enabled`, `secure_time`, the other `requirements` keys and `init_scripts` update in place with a restart. Turning on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk` for an existing app erases data on every boot and needs `confirm_data_wipe = true`.
 - These settings are kept as configured in state; the provider does not read them back from the cloud.
 - `annotations` (feature-flagged) are replaced as a whole map on every CVM of the app without a restart or a compose change. They are not read back either.
+- `launch_token` is stored in state as a sensitive value. Changing it sets the new token on the app first, then updates each CVM's `requirements.launch_token_hash`; a CVM that restarts in between fails to boot until its compose is updated. Removing it removes the hash from every CVM's compose, then clears the token.
 
 ### Bash runner example
 
@@ -98,6 +99,8 @@ resource "phala_app" "job" {
     health_check       = true
     health_status_file = "/run/health"
   }
+
+  generate_launch_token = true
 }
 ```
 
@@ -141,9 +144,11 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `env_update_scope` (String) Target of environment value updates: `all` (default) or `bootstrap`. Use `bootstrap` when phala_app_instance resources own per-slot environments; the parent then updates only its own bootstrap CVM. This does not change compose revision rollout scope.
 - `event_log_version` (Number) Event log format version, `1` or `2`. Relying parties that verify this app must support the chosen version. Changing it triggers compose update/restart.
 - `gateway_enabled` (Boolean) Enable public gateway routing (compose file setting). Changing this triggers compose update/restart.
+- `generate_launch_token` (Boolean) Have Phala Cloud generate the launch token when `launch_token` is not set. The generated token is kept until you set `launch_token` or turn this off.
 - `image` (String) OS image name.
 - `init_scripts` (Set of String) Platform init scripts every CVM of the app runs on boot: `docker_cleanup` (erases all container images and volumes on every boot) and `env_merge` (feature-flagged). Changing it triggers compose update/restart; turning `docker_cleanup` on for an existing app also needs `confirm_data_wipe = true`. Removing the attribute removes every script.
 - `kms` (String) KMS type for app provisioning (`phala`, `ethereum`, `base`). Changing this forces replacement.
+- `launch_token` (String, Sensitive) App launch token (at least 32 bytes). Every CVM of the app must present it on boot; the compose carries its hash in `requirements.launch_token_hash`. Set it, or set `generate_launch_token = true` to have Phala Cloud generate one, which is stored here. Phala Cloud and the node operator can read the token, so it only protects against parties who know the public compose. Changing it rotates the token and updates every CVM's compose; removing it removes the hash and then the token.
 - `listed` (Boolean) Whether the app's CVM(s) are publicly listed in the marketplace. Updated in place via `PATCH /cvms/{uuid}/listed` (a plain metadata flag — no redeploy, no restart, no attestation change), fanned out across every slot in members mode.
 - `members` (List of String) Optional list of stable slot names this app's replica set is composed of (MIG-style usage). When set, `name` must be one of these values, and `replicas` must be unset or 1 — the legacy anonymous-replica path is incompatible with named slots. Downstream `phala_app_instance` resources should derive their `for_each` from this attribute so the slot list is the single source of truth.
 - `node` (String) Physical node name for initial placement. When omitted on creation, placement is automatic. Omitting it later retains the stored placement. Changing the name forces replacement.

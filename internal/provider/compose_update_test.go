@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	phala "github.com/Phala-Network/phala-cloud/sdks/go"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -66,7 +67,7 @@ func TestBuildComposeUpdateRequest(t *testing.T) {
 			t.Parallel()
 			plan := base()
 			tc.mutate(&plan)
-			req, diags := buildComposeUpdateRequest(ctx, plan, base(), tc.envKeys, tc.updateEnvKeys)
+			req, diags := buildComposeUpdateRequest(ctx, plan, base(), tc.envKeys, tc.updateEnvKeys, phala.Patch[string]{})
 			if diags.HasError() {
 				t.Fatalf("diags: %v", diags)
 			}
@@ -87,7 +88,7 @@ func TestBuildComposeUpdateRequest(t *testing.T) {
 	// Removing init_scripts sends an empty list, which removes every script.
 	state := base()
 	state.InitScripts = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("docker_cleanup")})
-	req, diags := buildComposeUpdateRequest(ctx, base(), state, nil, false)
+	req, diags := buildComposeUpdateRequest(ctx, base(), state, nil, false, phala.Patch[string]{})
 	if diags.HasError() || req == nil {
 		t.Fatalf("req=%v diags=%v", req, diags)
 	}
