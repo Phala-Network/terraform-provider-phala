@@ -503,7 +503,7 @@ func (r *appInstanceResource) Read(ctx context.Context, req resource.ReadRequest
 
 	cvms, err := r.fetchAppCVMs(ctx, appID)
 	if err != nil {
-		if isNotFound(err) && state.LegacyNodeID.IsNull() {
+		if isNotFound(err) {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -513,10 +513,6 @@ func (r *appInstanceResource) Read(ctx context.Context, req resource.ReadRequest
 
 	match := findInstanceByName(cvms, name)
 	if match == nil {
-		if !state.LegacyNodeID.IsNull() {
-			resp.Diagnostics.AddError("Cannot migrate node placement", "The instance was not found, so its legacy teepod ID cannot be resolved.")
-			return
-		}
 		resp.State.RemoveResource(ctx)
 		return
 	}

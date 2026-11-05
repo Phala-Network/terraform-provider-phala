@@ -501,7 +501,7 @@ func (r *appResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 
 	fetched, err := r.fetchAppAndCVMs(ctx, appID)
 	if err != nil {
-		if isNotFound(err) && state.LegacyNodeID.IsNull() {
+		if isNotFound(err) {
 			resp.State.RemoveResource(ctx)
 			return
 		}

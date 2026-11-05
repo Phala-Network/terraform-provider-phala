@@ -17,8 +17,13 @@ func TestLegacyNodeStateUpgradeReadAndPlan(t *testing.T) {
 	for _, kind := range []string{"app", "app_instance"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx := context.Background()
+			gone := false
 			cvm := `{"name":"worker-1","vm_uuid":"vm-aaa","app_id":"app_test","instance_id":"inst-1","status":"running","resource":{"instance_type":"tdx.small"},"node_info":{"id":18,"name":"physical-node"}}`
 			httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if gone {
+					http.NotFound(w, r)
+					return
+				}
 				switch r.URL.Path {
 				case "/api/v1/apps/test":
 					fmt.Fprintf(w, `{"app_id":"app_test","name":"worker-1","cvms":[%s]}`, cvm)
@@ -147,20 +152,29 @@ func TestLegacyNodeStateUpgradeReadAndPlan(t *testing.T) {
 			if !foundError {
 				t.Fatal("expected an error for an unresolved legacy selector")
 			}
-			cvm = ""
-			missing, err := server.ReadResource(ctx, &tfprotov6.ReadResourceRequest{TypeName: typeName, CurrentState: upgrade.UpgradedState})
-			if err != nil {
-				t.Fatal(err)
-			}
-			foundError = false
-			for _, d := range missing.Diagnostics {
-				if d.Severity == tfprotov6.DiagnosticSeverityError && d.Summary == "Cannot migrate node placement" {
-					foundError = true
+			// A resource deleted outside Terraform leaves state, even before its
+			// legacy placement is migrated, so plan can recreate it.
+			assertRemoved := func(label string) {
+				t.Helper()
+				removed, err := server.ReadResource(ctx, &tfprotov6.ReadResourceRequest{TypeName: typeName, CurrentState: upgrade.UpgradedState})
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertNoDiagnostics(t, removed.Diagnostics)
+				state, err := removed.NewState.Unmarshal(objectType)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !state.IsNull() {
+					t.Fatalf("%s: unresolved legacy resource was not removed from state", label)
 				}
 			}
-			if !foundError {
-				t.Fatal("missing CVM must not remove an unresolved legacy resource from state")
+			if kind == "app_instance" {
+				cvm = ""
+				assertRemoved("instance missing from app")
 			}
+			gone = true
+			assertRemoved("app not found")
 			for _, explicit := range []bool{false, true} {
 				config := make(map[string]tftypes.Value, len(attrs))
 				proposed := make(map[string]tftypes.Value, len(attrs))
