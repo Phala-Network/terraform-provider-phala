@@ -270,11 +270,20 @@ func (r *appInstanceResource) ModifyPlan(ctx context.Context, req resource.Modif
 		return
 	}
 	var managed types.Bool
-	var previousNode, plannedNode types.String
+	var previousNode, plannedNode, previousAppID, plannedAppID, previousName, plannedName types.String
 	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("managed"), &managed)...)
 	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("node"), &previousNode)...)
 	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("node"), &plannedNode)...)
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("app_id"), &previousAppID)...)
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("app_id"), &plannedAppID)...)
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("name"), &previousName)...)
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("name"), &plannedName)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	// A new app_id or name replaces the resource and goes through the normal
+	// adoption flow, which verifies placement against the new slot.
+	if !previousAppID.Equal(plannedAppID) || !previousName.Equal(plannedName) {
 		return
 	}
 	if !managed.IsNull() && !managed.IsUnknown() && !managed.ValueBool() && !plannedNode.IsUnknown() && !previousNode.Equal(plannedNode) {

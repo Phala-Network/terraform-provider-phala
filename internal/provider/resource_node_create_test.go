@@ -168,6 +168,17 @@ func TestAdoptInstancePlacement(t *testing.T) {
 			if !blocked {
 				t.Fatalf("adopted placement change was not blocked: %v", changePlan.Diagnostics)
 			}
+			// Moving the adopted slot to another parent app replaces the resource
+			// and must not be blocked, whether the new app_id is known or not.
+			for _, appID := range []tftypes.Value{tftypes.NewValue(tftypes.String, "app_new"), tftypes.NewValue(tftypes.String, tftypes.UnknownValue)} {
+				values["app_id"] = appID
+				moved, _ := tfprotov6.NewDynamicValue(ot, tftypes.NewValue(ot, values))
+				movePlan, err := server.PlanResourceChange(ctx, &tfprotov6.PlanResourceChangeRequest{TypeName: "phala_app_instance", PriorState: applied.NewState, ProposedNewState: &moved, Config: &moved})
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertNoDiagnostics(t, movePlan.Diagnostics)
+			}
 		})
 	}
 }
