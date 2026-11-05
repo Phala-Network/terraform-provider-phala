@@ -31,7 +31,7 @@ Runs Phala Cloud app provision/preflight and returns the compose hash without co
 - `image` (String) OS image name.
 - `kms` (String) KMS type for app provisioning. Defaults to phala when omitted.
 - `listed` (Boolean) Whether the resource should be publicly listed. Defaults to false when omitted.
-- `node_id` (Number) Optional target node (teepod) ID for placement.
+- `node` (String) Physical node name for placement. When omitted, placement is automatic.
 - `nonce` (Number) Optional nonce paired with custom_app_id for PHALA KMS deterministic app_id flow.
 - `pre_launch_script` (String) Optional pre-launch script content.
 - `public_logs` (Boolean) Expose container logs publicly.

@@ -86,7 +86,7 @@ func TestCVMEnvSingleTerraformApplyAndSensitiveUpdate(t *testing.T) {
 				if err := json.Unmarshal(raw, &compose); err != nil || len(compose.AllowedEnvs) != 2 {
 					t.Errorf("missing measured allowlist: %s (%v)", raw, err)
 				}
-				write(map[string]any{"app_id": "app_test", "compose_hash": "abc"})
+				write(map[string]any{"app_id": "app_test", "compose_hash": "abc", "token": "tok_test"})
 			} else {
 				if body["encrypted_env"] != nil {
 					t.Error("allocation must not own runtime values")
