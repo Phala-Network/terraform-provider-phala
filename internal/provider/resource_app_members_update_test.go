@@ -307,7 +307,7 @@ func TestWaitForCVMsOnComposeHashSucceedsOnAllSettled(t *testing.T) {
 	r := &appResource{
 		client: newTestPhalaClient(t, srv.URL+"/api/v1"),
 	}
-	if err := r.waitForCVMsOnComposeHash(context.Background(), "app_test", "newhash",
+	if err := r.waitForCVMsOnComposeHash(context.Background(), "app_test", "newhash", nil,
 		time.Now().Add(30*time.Second)); err != nil {
 		t.Fatalf("waitForCVMsOnComposeHash: %v", err)
 	}
@@ -375,5 +375,84 @@ func TestMembersModeComposeUpdatePatchesBootstrapThenRedeploys(t *testing.T) {
 	}
 	if string(redeployBody) != `{"vm_uuids":["vm-peer"]}` {
 		t.Fatalf("redeploy body = %s", redeployBody)
+	}
+}
+
+// TestMembersModeComposeUpdateKeepsStoppedCVMsStopped asserts that a
+// members-mode compose update of stopped CVMs completes without error: the
+// bootstrap finishes the PATCH still stopped, the peers are redeployed, and a
+// peer that stays stopped on the new compose counts as done. A CVM that was
+// running and ends stopped is still a failure.
+func TestMembersModeComposeUpdateKeepsStoppedCVMsStopped(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		peerBefore string
+		wantErr    bool
+	}{
+		{"stopped peer stays stopped", "stopped", false},
+		{"running peer ends stopped", "running", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var writes []string
+			patched, redeployed := false, false
+			bootPolls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				path := strings.TrimPrefix(r.URL.Path, "/api/v1")
+				if r.Method != http.MethodGet {
+					writes = append(writes, r.Method+" "+path)
+				}
+				switch {
+				case r.Method == http.MethodPatch && path == "/cvms/vm-boot":
+					patched = true
+					writeJSON(t, w, http.StatusAccepted, `{"status":"in_progress","correlation_id":"c1"}`)
+				case r.Method == http.MethodGet && path == "/cvms/vm-boot":
+					bootPolls++
+					if bootPolls == 1 {
+						writeJSON(t, w, http.StatusOK, `{"vm_uuid":"vm-boot","compose_hash":"newhash","status":"updating","in_progress":true}`)
+						return
+					}
+					writeJSON(t, w, http.StatusOK, `{"vm_uuid":"vm-boot","compose_hash":"newhash","status":"stopped"}`)
+				case r.Method == http.MethodGet && path == "/apps/test/revisions":
+					writeJSON(t, w, http.StatusOK, `{"revisions":[{"revision_id":"rev_9","compose_hash":"newhash"}],"total":1,"page":1,"page_size":50,"total_pages":1}`)
+				case r.Method == http.MethodPost && path == "/apps/test/revisions/rev_9/redeploy":
+					redeployed = true
+					writeJSON(t, w, http.StatusAccepted, `{"message":"ok"}`)
+				case r.Method == http.MethodGet && path == "/apps/test/cvms":
+					switch {
+					case !patched:
+						writeJSON(t, w, http.StatusOK, `[{"vm_uuid":"vm-boot","compose_hash":"old","status":"stopped"},
+							{"vm_uuid":"vm-peer","compose_hash":"old","status":"`+tc.peerBefore+`"}]`)
+					case redeployed:
+						writeJSON(t, w, http.StatusOK, `[{"vm_uuid":"vm-boot","compose_hash":"newhash","status":"stopped"},
+							{"vm_uuid":"vm-peer","compose_hash":"newhash","status":"stopped"}]`)
+					default:
+						t.Errorf("app CVMs read between PATCH and redeploy")
+					}
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			r := &appResource{client: newTestPhalaClient(t, srv.URL+"/api/v1")}
+			diags := r.applyMembersModeUpdate(context.Background(), applyMembersModeArgs{
+				appID:       "app_test",
+				bootstrapID: "vm-boot",
+				vmUUIDs:     []string{"vm-boot", "vm-peer"},
+				plan:        appResourceModel{WaitTimeoutSecond: types.Int64Value(30)},
+				composeReq:  &phala.PatchCVMRequest{Compose: &phala.ComposePatch{SwapSize: phala.PatchValue("4G")}},
+			})
+			if diags.HasError() != tc.wantErr {
+				t.Fatalf("error = %v, want error %v", diags, tc.wantErr)
+			}
+			want := []string{"PATCH /cvms/vm-boot", "POST /apps/test/revisions/rev_9/redeploy"}
+			if strings.Join(writes, ",") != strings.Join(want, ",") {
+				t.Fatalf("writes = %v, want %v (no start)", writes, want)
+			}
+		})
 	}
 }

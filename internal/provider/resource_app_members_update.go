@@ -166,14 +166,73 @@ func (r *appResource) waitForCVMReadyByID(
 	}
 }
 
+// waitForCVMUpdateSettled polls a CVM until its update has finished: no
+// operation in progress, and running, or stopped when it was stopped before
+// the update (an update keeps the prior power state).
+func (r *appResource) waitForCVMUpdateSettled(
+	ctx context.Context,
+	cvmID string,
+	wasStopped bool,
+	deadline time.Time,
+) error {
+	for {
+		cvm, err := r.fetchCVM(ctx, cvmID)
+		if err != nil && !isRetryable(err) && !isNotFound(err) {
+			return err
+		}
+		if cvm != nil && !cvmInfoInProgress(cvm) {
+			switch stablePowerState(cvm.Status) {
+			case "running":
+				return nil
+			case "stopped":
+				if wasStopped {
+					return nil
+				}
+				return fmt.Errorf("CVM %s entered terminal stopped state: %s", cvmID, describeReplicaState(cvm))
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for the update of CVM %s to finish", cvmID)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval(3 * time.Second)):
+		}
+	}
+}
+
+// stoppedCVMs returns the identifiers (id and vm_uuid) of the app's CVMs that
+// are stopped, so the update waits accept them staying stopped.
+func (r *appResource) stoppedCVMs(ctx context.Context, appID string) (map[string]bool, error) {
+	cvms, err := r.fetchAppCVMs(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	stopped := map[string]bool{}
+	for i := range cvms {
+		if stablePowerState(cvms[i].Status) != "stopped" {
+			continue
+		}
+		for _, id := range []string{selectReplicaIdentifier(cvms[i]), cvmInfoVMUUID(&cvms[i])} {
+			if id != "" {
+				stopped[id] = true
+			}
+		}
+	}
+	return stopped, nil
+}
+
 // waitForCVMsOnComposeHash polls the app's CVM list until every CVM
-// reports `compose_hash == expectedHash` AND `status == running` AND
-// not in-progress. Returns nil on success, an error on timeout or an
+// reports `compose_hash == expectedHash` AND not in-progress AND
+// `status == running`, or `status == stopped` for a CVM in stoppedBefore
+// (keyed by vm_uuid). Returns nil on success, an error on timeout or an
 // unrecoverable stoppage.
 func (r *appResource) waitForCVMsOnComposeHash(
 	ctx context.Context,
 	appID string,
 	expectedHash string,
+	stoppedBefore map[string]bool,
 	deadline time.Time,
 ) error {
 	want := strings.ToLower(strings.TrimSpace(expectedHash))
@@ -194,7 +253,12 @@ func (r *appResource) waitForCVMsOnComposeHash(
 					settled = false
 					break
 				}
-				if !strings.EqualFold(strings.TrimSpace(c.Status), "running") || cvmInfoInProgress(c) {
+				if cvmInfoInProgress(c) {
+					settled = false
+					break
+				}
+				state := stablePowerState(c.Status)
+				if state != "running" && (state != "stopped" || !stoppedBefore[cvmInfoVMUUID(c)]) {
 					settled = false
 					break
 				}
@@ -202,7 +266,13 @@ func (r *appResource) waitForCVMsOnComposeHash(
 			if settled {
 				return nil
 			}
-			if failed, summary := stoppedReplicaFailure(cvms); failed {
+			var unexpected []phala.CVMInfo
+			for i := range cvms {
+				if !stoppedBefore[cvmInfoVMUUID(&cvms[i])] {
+					unexpected = append(unexpected, cvms[i])
+				}
+			}
+			if failed, summary := stoppedReplicaFailure(unexpected); failed {
 				return fmt.Errorf("redeploy failed: %s", summary)
 			}
 		}
@@ -366,6 +436,12 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 	}
 
 	if a.composeReq != nil {
+		// An update keeps a stopped CVM stopped; the waits below accept that.
+		stoppedBefore, err := r.stoppedCVMs(ctx, a.appID)
+		if err != nil {
+			diags.AddError("Failed to read app CVMs before compose apply", err.Error())
+			return diags
+		}
 		// Apply to the bootstrap first: that records the revision, which is
 		// then redeployed to every other slot.
 		if err := patchCompose(ctx, r.client, a.bootstrapID, a.composeReq); err != nil {
@@ -374,10 +450,10 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 		}
 
 		// Wait for the bootstrap to land on the new compose_hash. Its
-		// CVM row carries the hash, so once it's `running` and not
-		// in_progress we can read it back to resolve the revision_id.
+		// CVM row carries the hash, so once the update is no longer in
+		// progress we can read it back to resolve the revision_id.
 		deadline := time.Now().Add(waitTimeout(a.plan.WaitTimeoutSecond))
-		if err := r.waitForCVMReadyByID(ctx, a.bootstrapID, deadline); err != nil {
+		if err := r.waitForCVMUpdateSettled(ctx, a.bootstrapID, stoppedBefore[a.bootstrapID], deadline); err != nil {
 			diags.AddError("Bootstrap CVM did not settle after compose apply", err.Error())
 			return diags
 		}
@@ -418,7 +494,7 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 				diags.AddError("Failed to schedule redeploy across slot CVMs", err.Error())
 				return diags
 			}
-			if err := r.waitForCVMsOnComposeHash(ctx, a.appID, newComposeHash, deadline); err != nil {
+			if err := r.waitForCVMsOnComposeHash(ctx, a.appID, newComposeHash, stoppedBefore, deadline); err != nil {
 				diags.AddError("Slot CVMs did not complete redeploy in time", err.Error())
 				return diags
 			}
