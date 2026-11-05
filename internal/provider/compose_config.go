@@ -87,12 +87,18 @@ func composeConfigSchemaAttrs() map[string]schema.Attribute {
 			Optional: true,
 			MarkdownDescription: "Guest requirements (compose `requirements`, dstack OS 0.6.0+). Only the keys you set are written to the compose. " +
 				"Changing a key other than `gpu_policy` triggers compose update/restart.",
+			// gpu_policy has no update path. The check sits on the parent because
+			// nested modifiers do not run when the whole block is removed.
+			PlanModifiers: []planmodifier.Object{objectplanmodifier.RequiresReplaceIf(
+				gpuPolicyChanged,
+				"Changing requirements.gpu_policy forces replacement.",
+				"Changing `requirements.gpu_policy` forces replacement.",
+			)},
 			Attributes: map[string]schema.Attribute{
 				"gpu_policy": schema.SingleNestedAttribute{
 					Optional: true,
 					MarkdownDescription: "GPU policy the guest enforces. Needs the `compose_gpu_policy` feature flag. " +
 						"Changing this forces replacement.",
-					PlanModifiers: []planmodifier.Object{objectplanmodifier.RequiresReplace()},
 					Attributes: map[string]schema.Attribute{
 						"allow_debug":         schema.BoolAttribute{Optional: true},
 						"allow_devtools":      schema.BoolAttribute{Optional: true},
@@ -161,6 +167,34 @@ func composeConfigSchemaAttrs() map[string]schema.Attribute {
 				"The generated token is kept until you set `launch_token` or turn this off.",
 		},
 	}
+}
+
+// gpuPolicyChanged reports whether requirements.gpu_policy differs between
+// state and plan, counting a removed requirements block as a null policy.
+func gpuPolicyChanged(_ context.Context, req planmodifier.ObjectRequest, resp *objectplanmodifier.RequiresReplaceIfFuncResponse) {
+	if req.PlanValue.IsUnknown() {
+		// Decided once the value is known: the final plan at apply time
+		// then requires replacement, which Terraform reports as an error.
+		return
+	}
+	state, plan := gpuPolicyOf(req.StateValue), gpuPolicyOf(req.PlanValue)
+	if state == nil || plan == nil {
+		resp.RequiresReplace = state != plan
+		return
+	}
+	resp.RequiresReplace = !state.Equal(plan)
+}
+
+// gpuPolicyOf returns the set gpu_policy of a requirements block, or nil.
+func gpuPolicyOf(requirements types.Object) attr.Value {
+	if requirements.IsNull() || requirements.IsUnknown() {
+		return nil
+	}
+	policy := requirements.Attributes()["gpu_policy"]
+	if policy == nil || policy.IsNull() {
+		return nil
+	}
+	return policy
 }
 
 type portPolicyModel struct {

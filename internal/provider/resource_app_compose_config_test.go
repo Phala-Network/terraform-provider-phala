@@ -511,3 +511,38 @@ func TestAppResourceComposeConfigForceNew(t *testing.T) {
 		}
 	}
 }
+
+// TestAppResourceGPUPolicyRemovalForcesReplacement asserts that removing the
+// whole requirements block, not only gpu_policy inside it, plans a
+// replacement: the backend cannot remove a stored gpu_policy in place.
+func TestAppResourceGPUPolicyRemovalForcesReplacement(t *testing.T) {
+	api := newComposeConfigAPI(t)
+	h := newAppHarness(t, api.server.URL)
+	gpuPolicyType := h.objType.AttributeTypes["requirements"].(tftypes.Object).AttributeTypes["gpu_policy"].(tftypes.Object)
+	withPolicy := func(extra map[string]tftypes.Value) tftypes.Value {
+		values := map[string]tftypes.Value{
+			"gpu_policy": nestedObject(gpuPolicyType, map[string]tftypes.Value{"attest_gpu": tftypes.NewValue(tftypes.Bool, true)}),
+		}
+		for k, v := range extra {
+			values[k] = v
+		}
+		return h.object("requirements", values)
+	}
+	created := h.apply(nil, h.composeConfigApp(map[string]tftypes.Value{"requirements": withPolicy(nil)}))
+	api.take()
+
+	for _, tc := range []struct {
+		name         string
+		requirements tftypes.Value
+		forceNew     bool
+	}{
+		{"whole block removed", tftypes.NewValue(h.objType.AttributeTypes["requirements"], nil), true},
+		{"policy removed", h.object("requirements", map[string]tftypes.Value{"health_check": tftypes.NewValue(tftypes.Bool, true)}), true},
+		{"other key changed", withPolicy(map[string]tftypes.Value{"health_check": tftypes.NewValue(tftypes.Bool, true)}), false},
+	} {
+		planned := h.plan(created, h.composeConfigApp(map[string]tftypes.Value{"requirements": tc.requirements}))
+		if got := len(planned.RequiresReplace) > 0; got != tc.forceNew {
+			t.Errorf("%s: replacement %v, want %v (%v)", tc.name, got, tc.forceNew, planned.RequiresReplace)
+		}
+	}
+}
