@@ -68,9 +68,25 @@ func TestAppResourceEnvUpdateTriggersEnvsPATCH(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			if _, preparing := payload["compose_file"]; preparing {
+			if rawCompose, preparing := payload["compose_file"]; preparing {
+				// The env is encrypted to the app key returned by prepare, so it
+				// can only travel on commit. The backend compose model also
+				// rejects unknown keys such as a nested encrypted_env.
+				if _, ok := payload["encrypted_env"]; ok {
+					t.Error("prepare request must not carry encrypted_env")
+				}
+				var compose map[string]json.RawMessage
+				if err := json.Unmarshal(rawCompose, &compose); err != nil {
+					t.Errorf("decode compose_file: %v", err)
+				}
+				if _, ok := compose["encrypted_env"]; ok {
+					t.Error("compose_file must not carry encrypted_env")
+				}
 				writeJSON(t, w, http.StatusOK, `{"app_id":"app_test","compose_hash":"abc","app_env_encrypt_pubkey":"`+envUpdateTestPubkey+`"}`)
 			} else {
+				if _, ok := payload["encrypted_env"]; !ok {
+					t.Error("commit request must carry encrypted_env")
+				}
 				writeJSON(t, w, http.StatusOK, envUpdateCVMResponse)
 			}
 		case r.Method == http.MethodGet && path == "/api/v1/apps/test":

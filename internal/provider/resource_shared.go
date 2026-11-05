@@ -310,9 +310,6 @@ func buildProvisionReq(f provisionFields) (*phala.ProvisionCVMRequest, error) {
 		if v, ok := f.ComposeFile["gateway_enabled"].(bool); ok {
 			cf.GatewayEnabled = &v
 		}
-		if v, ok := f.ComposeFile["encrypted_env"].(string); ok {
-			cf.EncryptedEnv = &v
-		}
 		if keys, ok := f.ComposeFile["allowed_envs"].([]string); ok && len(keys) > 0 {
 			cf.AllowedEnvs = keys
 		}
