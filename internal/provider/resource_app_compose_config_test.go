@@ -22,7 +22,13 @@ import (
 const (
 	generatedLaunchToken = "generated-launch-token-0123456789abcdef"
 	explicitLaunchToken  = "explicit-launch-token-0123456789abcdef01"
+	shortLaunchToken     = "short-secret-token"
 )
+
+// shortLaunchTokenError is FastAPI's 422 body for a launch token below 32
+// bytes; it echoes the token in detail[].input.
+const shortLaunchTokenError = `{"detail":[{"type":"value_error","loc":["body","launch_token"],` +
+	`"msg":"Value error, launch_token must be at least 32 bytes","input":"` + shortLaunchToken + `","ctx":{"error":{}}}]}`
 
 // composeConfigAPI is a mock Phala Cloud API that records every write.
 type composeConfigAPI struct {
@@ -92,6 +98,10 @@ func (a *composeConfigAPI) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := a.record(r)
+	if body["launch_token"] == shortLaunchToken {
+		writeJSON(t, w, http.StatusUnprocessableEntity, shortLaunchTokenError)
+		return
+	}
 	switch {
 	case r.Method == http.MethodPost && path == "/cvms":
 		if _, provision := body["compose_file"]; provision {
@@ -207,6 +217,13 @@ func (h *appHarness) plan(prior *tfprotov6.DynamicValue, config tftypes.Value) *
 // apply plans and applies config, returning the new state.
 func (h *appHarness) apply(prior *tfprotov6.DynamicValue, config tftypes.Value) *tfprotov6.DynamicValue {
 	h.t.Helper()
+	resp := h.applyResponse(prior, config)
+	assertNoDiagnostics(h.t, resp.Diagnostics)
+	return resp.NewState
+}
+
+func (h *appHarness) applyResponse(prior *tfprotov6.DynamicValue, config tftypes.Value) *tfprotov6.ApplyResourceChangeResponse {
+	h.t.Helper()
 	planned := h.plan(prior, config)
 	priorDV := prior
 	if priorDV == nil {
@@ -218,8 +235,7 @@ func (h *appHarness) apply(prior *tfprotov6.DynamicValue, config tftypes.Value) 
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	assertNoDiagnostics(h.t, resp.Diagnostics)
-	return resp.NewState
+	return resp
 }
 
 func (h *appHarness) attr(state *tfprotov6.DynamicValue, name string) tftypes.Value {
@@ -472,6 +488,37 @@ func TestAppResourceLaunchToken(t *testing.T) {
 	if !h.attr(removed, "launch_token").IsNull() {
 		t.Fatal("launch_token must be null after removal")
 	}
+}
+
+// TestAppResourceRejectedLaunchTokenStaysOutOfDiagnostics asserts that when
+// the API rejects a launch token with a 422 that echoes it, the diagnostics
+// keep the field and the reason but not the token, on create and on rotation.
+func TestAppResourceRejectedLaunchTokenStaysOutOfDiagnostics(t *testing.T) {
+	api := newComposeConfigAPI(t)
+	h := newAppHarness(t, api.server.URL)
+	short := map[string]tftypes.Value{"launch_token": tftypes.NewValue(tftypes.String, shortLaunchToken)}
+	assertRedacted := func(step string, resp *tfprotov6.ApplyResourceChangeResponse) {
+		t.Helper()
+		if len(resp.Diagnostics) == 0 {
+			t.Fatalf("%s: rejected launch token produced no diagnostic", step)
+		}
+		for _, d := range resp.Diagnostics {
+			text := d.Summary + "\n" + d.Detail
+			if strings.Contains(text, shortLaunchToken) {
+				t.Fatalf("%s: diagnostic leaks the launch token:\n%s", step, text)
+			}
+			if !strings.Contains(text, "body.launch_token: Value error, launch_token must be at least 32 bytes") {
+				t.Fatalf("%s: diagnostic lost the field or reason:\n%s", step, text)
+			}
+		}
+	}
+
+	assertRedacted("create", h.applyResponse(nil, h.composeConfigApp(short)))
+	api.take()
+
+	created := h.apply(nil, h.composeConfigApp(nil))
+	api.take()
+	assertRedacted("rotation", h.applyResponse(created, h.composeConfigApp(short)))
 }
 
 // TestAppResourceComposeConfigForceNew asserts that exactly the settings the

@@ -585,6 +585,40 @@ func diagnosticFromAPIError(fallbackSummary string, err error) (string, string) 
 	return fallbackSummary, apiErr.Error()
 }
 
+// diagnosticWithoutInput is diagnosticFromAPIError for requests that carry a
+// secret, such as a launch token. Validation errors echo the submitted value
+// (FastAPI detail[].input, structured details[].value), so only the field and
+// the reason are kept.
+func diagnosticWithoutInput(fallbackSummary string, err error) (string, string) {
+	apiErr, ok := err.(*phala.APIError)
+	if !ok {
+		return fallbackSummary, err.Error()
+	}
+	var reasons []string
+	if items, ok := apiErr.Detail.([]any); ok {
+		for _, item := range items {
+			entry, _ := item.(map[string]any)
+			var loc []string
+			if parts, ok := entry["loc"].([]any); ok {
+				for _, part := range parts {
+					loc = append(loc, fmt.Sprint(part))
+				}
+			}
+			reasons = append(reasons, fmt.Sprintf("%s: %v", strings.Join(loc, "."), entry["msg"]))
+		}
+	} else {
+		reasons = append(reasons, apiErr.Message)
+	}
+	for _, d := range apiErr.Details {
+		reasons = append(reasons, fmt.Sprintf("%s: %s", d.Field, d.Message))
+	}
+	summary := fallbackSummary
+	if apiErr.IsStructured() {
+		summary = fmt.Sprintf("[%s] %s", apiErr.ErrorCode, apiErr.Message)
+	}
+	return summary, fmt.Sprintf("phala api error (status %d): %s", apiErr.StatusCode, strings.Join(reasons, "; "))
+}
+
 // composeEnvKeysFromAttrs derives the list of allowed_env keys for an app compose.
 // Prefers the env map (returning its sorted keys) and falls back to an explicit
 // env_keys list. Returns (keys, hasKeys, diagnostics).

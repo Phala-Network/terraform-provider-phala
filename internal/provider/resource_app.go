@@ -465,7 +465,7 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 
 	provResp, err := r.client.ProvisionCVM(ctx, provReq)
 	if err != nil {
-		summary, detail := diagnosticFromAPIError("Failed to provision app", err)
+		summary, detail := diagnosticWithoutInput("Failed to provision app", err)
 		resp.Diagnostics.AddError(summary, detail)
 		return
 	}
@@ -669,7 +669,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 
 	launchTokenHash, clearLaunchToken, err := updateLaunchToken(ctx, r.client, appID, &plan, state)
 	if err != nil {
-		summary, detail := diagnosticFromAPIError("Failed to set app launch token", err)
+		summary, detail := diagnosticWithoutInput("Failed to set app launch token", err)
 		resp.Diagnostics.AddError(summary, detail)
 		return
 	}
