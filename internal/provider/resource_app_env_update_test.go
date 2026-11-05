@@ -82,8 +82,12 @@ func TestAppResourceEnvUpdateTriggersEnvsPATCH(t *testing.T) {
 				if _, ok := compose["encrypted_env"]; ok {
 					t.Error("compose_file must not carry encrypted_env")
 				}
-				writeJSON(t, w, http.StatusOK, `{"app_id":"app_test","compose_hash":"abc","app_env_encrypt_pubkey":"`+envUpdateTestPubkey+`"}`)
+				writeJSON(t, w, http.StatusOK, `{"app_id":"app_test","compose_hash":"abc","app_env_encrypt_pubkey":"`+envUpdateTestPubkey+`","token":"tok_test"}`)
 			} else {
+				// Same-path two-phase create: commit forwards the one-time token.
+				if string(payload["token"]) != `"tok_test"` {
+					t.Errorf("commit token = %s, want \"tok_test\"", payload["token"])
+				}
 				if _, ok := payload["encrypted_env"]; !ok {
 					t.Error("commit request must carry encrypted_env")
 				}
