@@ -76,12 +76,13 @@ Downstream `phala_app_instance` resources should set `for_each = toset(phala_app
 
 The one structural change still blocked is **removing the `members` attribute** from a previously-members-mode app: that would leave the `phala_app_instance` slots orphaned. The provider blocks this at plan time and asks you to destroy and recreate.
 
-## Compose settings and init scripts
+## Compose settings, init scripts and annotations
 
 - Every compose change of one apply is sent as a single `PATCH /cvms/{id}` whose `compose` object is a JSON Merge Patch: only changed keys are sent, a removed attribute is sent as `null`, and compose keys the provider does not manage stay as they are.
 - `runner`, `bash_script` and `requirements.gpu_policy` cannot be changed after create; changing them replaces the app. `storage_fs` was already force-new.
 - `port_policy`, `swap_size`, `storage_discard`, `snapshotter`, `event_log_version`, `gateway_enabled`, `secure_time`, the other `requirements` keys and `init_scripts` update in place with a restart. Turning on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk` for an existing app erases data on every boot and needs `confirm_data_wipe = true`.
 - These settings are kept as configured in state; the provider does not read them back from the cloud.
+- `annotations` (feature-flagged) are replaced as a whole map on every CVM of the app without a restart or a compose change. They are not read back either.
 
 ### Bash runner example
 
@@ -127,6 +128,7 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 
 ### Optional
 
+- `annotations` (Map of String) Host-side key/value metadata the dstack VMM stores for each CVM of the app (dstack VMM 0.6.1+). Not measured: tenants must not rely on it for security. Needs the `cvm_annotations` feature flag. Updated in place by replacing the whole map, without a restart; host tools that read annotations when the CVM starts see the change after the next restart. Removing the attribute clears the annotations.
 - `bash_script` (String) Script the `bash` runner executes instead of a Docker Compose file; set `docker_compose = ""` with it. Changing this forces replacement.
 - `confirm_data_wipe` (Boolean) Confirms an update that turns on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk`, which erase data on every boot. Not needed on create.
 - `custom_app_id` (String) Optional custom app_id for deterministic identity flow. Changing this forces replacement.

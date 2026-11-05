@@ -40,12 +40,13 @@ Downstream `phala_app_instance` resources should set `for_each = toset(phala_app
 
 The one structural change still blocked is **removing the `members` attribute** from a previously-members-mode app: that would leave the `phala_app_instance` slots orphaned. The provider blocks this at plan time and asks you to destroy and recreate.
 
-## Compose settings and init scripts
+## Compose settings, init scripts and annotations
 
 - Every compose change of one apply is sent as a single `PATCH /cvms/{id}` whose `compose` object is a JSON Merge Patch: only changed keys are sent, a removed attribute is sent as `null`, and compose keys the provider does not manage stay as they are.
 - `runner`, `bash_script` and `requirements.gpu_policy` cannot be changed after create; changing them replaces the app. `storage_fs` was already force-new.
 - `port_policy`, `swap_size`, `storage_discard`, `snapshotter`, `event_log_version`, `gateway_enabled`, `secure_time`, the other `requirements` keys and `init_scripts` update in place with a restart. Turning on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk` for an existing app erases data on every boot and needs `confirm_data_wipe = true`.
 - These settings are kept as configured in state; the provider does not read them back from the cloud.
+- `annotations` (feature-flagged) are replaced as a whole map on every CVM of the app without a restart or a compose change. They are not read back either.
 
 ### Bash runner example
 

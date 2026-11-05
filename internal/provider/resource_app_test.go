@@ -826,6 +826,9 @@ func TestComposeHashInputsChanged(t *testing.T) {
 		{"init scripts", func(m *appResourceModel) {
 			m.InitScripts = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("docker_cleanup")})
 		}, nil, true},
+		{"annotations only", func(m *appResourceModel) {
+			m.Annotations = types.MapValueMust(types.StringType, map[string]attr.Value{"tier": types.StringValue("fast")})
+		}, nil, false},
 		{"ciphertext only", func(m *appResourceModel) { m.EncryptedEnv = types.StringValue("deadbeef") }, nil, false},
 		{"placement only", func(m *appResourceModel) { m.Size = types.StringValue("tdx.large") }, nil, false},
 	} {

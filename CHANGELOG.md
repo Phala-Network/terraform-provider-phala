@@ -8,6 +8,8 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 - `phala_app` supports the newer app compose settings: `port_policy`, `swap_size`, `storage_discard`, `snapshotter`, `event_log_version`, `requirements` (`health_check`, `health_status_file`, `platforms`, `tdx_measure_acpi_tables`, `ephemeral_data_disk`, and create-only `gpu_policy`), create-only `runner` and `bash_script`, and `init_scripts` with `confirm_data_wipe` for updates that erase data on every boot. Compose changes are sent as one `PATCH /cvms/{id}` merge patch, so the provider no longer rebuilds the whole compose on update.
 
+- `phala_app.annotations` sets host-side CVM annotations (needs the `cvm_annotations` feature flag). Changes replace the whole map on every CVM of the app without a restart.
+
 - Add `phala_cvm_env` to configure encrypted environment values after CVM identity allocation, including bootstrap CVMs. Declare the measured key allowlist separately with `phala_app.env_keys` to avoid self-referential deployment cycles in one normal apply.
 
 - `phala_app_instance.wait_for_identity` waits for an instance-pinned endpoint identity without waiting for the full CVM boot, allowing dependent CVMs to launch concurrently.

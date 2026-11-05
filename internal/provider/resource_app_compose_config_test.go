@@ -96,6 +96,8 @@ func (a *composeConfigAPI) handle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, http.StatusOK, `{"id":"cvm123","name":"demo","status":"starting"}`)
 	case r.Method == http.MethodPatch && path == "/cvms/cvm123":
 		writeJSON(t, w, http.StatusAccepted, `{"status":"accepted","correlation_id":"c1"}`)
+	case r.Method == http.MethodPut && path == "/cvms/cvm123/annotations":
+		writeJSON(t, w, http.StatusOK, `{"annotations":{}}`)
 	default:
 		t.Errorf("unexpected request: %s %s", r.Method, path)
 		w.WriteHeader(http.StatusNotFound)
@@ -261,6 +263,14 @@ func stringSet(values ...string) tftypes.Value {
 	return tftypes.NewValue(tftypes.Set{ElementType: tftypes.String}, elems)
 }
 
+func stringMap(values map[string]string) tftypes.Value {
+	elems := map[string]tftypes.Value{}
+	for k, v := range values {
+		elems[k] = tftypes.NewValue(tftypes.String, v)
+	}
+	return tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, elems)
+}
+
 func stringList(values ...string) tftypes.Value {
 	elems := make([]tftypes.Value, 0, len(values))
 	for _, v := range values {
@@ -365,6 +375,36 @@ func TestAppResourceComposeSettingsLifecycle(t *testing.T) {
 	}`)
 }
 
+// TestAppResourceAnnotations asserts that annotations go in the provision
+// request on create, and on update are replaced as a whole map, cleared with an
+// empty map when removed, without a compose update.
+func TestAppResourceAnnotations(t *testing.T) {
+	api := newComposeConfigAPI(t)
+	h := newAppHarness(t, api.server.URL)
+
+	created := h.apply(nil, h.composeConfigApp(map[string]tftypes.Value{
+		"annotations": stringMap(map[string]string{"tier": "fast"}),
+	}))
+	_, bodies := api.take()
+	assertJSONEqual(t, "provision annotations", bodies["POST /cvms (provision)"]["annotations"], `{"tier":"fast"}`)
+
+	updated := h.apply(created, h.composeConfigApp(map[string]tftypes.Value{
+		"annotations": stringMap(map[string]string{"tier": "slow", "pin": "numa0"}),
+	}))
+	writes, bodies := api.take()
+	if !reflect.DeepEqual(writes, []string{"PUT /cvms/cvm123/annotations"}) {
+		t.Fatalf("update writes = %v", writes)
+	}
+	assertJSONEqual(t, "annotations body", bodies["PUT /cvms/cvm123/annotations"], `{"annotations":{"tier":"slow","pin":"numa0"}}`)
+
+	h.apply(updated, h.composeConfigApp(nil))
+	writes, bodies = api.take()
+	if !reflect.DeepEqual(writes, []string{"PUT /cvms/cvm123/annotations"}) {
+		t.Fatalf("removal writes = %v", writes)
+	}
+	assertJSONEqual(t, "removal body", bodies["PUT /cvms/cvm123/annotations"], `{"annotations":{}}`)
+}
+
 // TestAppResourceComposeConfigForceNew asserts that exactly the settings the
 // backend cannot update (runner, bash_script, requirements.gpu_policy) plan a
 // replacement, and that the other compose settings update in place.
@@ -392,6 +432,7 @@ func TestAppResourceComposeConfigForceNew(t *testing.T) {
 		{"snapshotter", tftypes.NewValue(tftypes.String, "stargz"), false},
 		{"event_log_version", tftypes.NewValue(tftypes.Number, 2), false},
 		{"init_scripts", stringSet("docker_cleanup"), false},
+		{"annotations", stringMap(map[string]string{"k": "v"}), false},
 	} {
 		planned := h.plan(created, h.composeConfigApp(map[string]tftypes.Value{tc.attr: tc.value}))
 		got := len(planned.RequiresReplace) > 0

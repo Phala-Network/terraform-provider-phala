@@ -79,6 +79,7 @@ type appResourceModel struct {
 	Requirements        types.Object `tfsdk:"requirements"`
 	InitScripts         types.Set    `tfsdk:"init_scripts"`
 	ConfirmDataWipe     types.Bool   `tfsdk:"confirm_data_wipe"`
+	Annotations         types.Map    `tfsdk:"annotations"`
 }
 
 type appInstanceModel struct {
@@ -500,14 +501,17 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
-// applyCreateConfig adds the compose settings and init scripts to a create
-// request.
+// applyCreateConfig adds the compose settings, init scripts and annotations
+// to a create request.
 func applyCreateConfig(ctx context.Context, plan appResourceModel, req *phala.ProvisionCVMRequest) diag.Diagnostics {
 	composeCfg, diags := readComposeConfig(ctx, plan)
 	if diags.HasError() {
 		return diags
 	}
 	composeCfg.applyTo(req)
+	if !plan.Annotations.IsNull() {
+		diags.Append(plan.Annotations.ElementsAs(ctx, &req.Annotations, false)...)
+	}
 	return diags
 }
 
@@ -691,6 +695,18 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 			listedChanged:   listedChanged,
 		}); diags.HasError() {
 			resp.Diagnostics.Append(diags...)
+			return
+		}
+	}
+
+	if !plan.Annotations.Equal(state.Annotations) {
+		targets := []string{bootstrapID}
+		if membersMode {
+			targets = collectVMUUIDs(cvms)
+		}
+		if err := putAnnotations(ctx, r.client, targets, plan.Annotations); err != nil {
+			summary, detail := diagnosticFromAPIError("Failed to update app annotations", err)
+			resp.Diagnostics.AddError(summary, detail)
 			return
 		}
 	}

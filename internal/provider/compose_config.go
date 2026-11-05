@@ -137,6 +137,14 @@ func composeConfigSchemaAttrs() map[string]schema.Attribute {
 			MarkdownDescription: "Confirms an update that turns on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk`, " +
 				"which erase data on every boot. Not needed on create.",
 		},
+		"annotations": schema.MapAttribute{
+			Optional:    true,
+			ElementType: types.StringType,
+			MarkdownDescription: "Host-side key/value metadata the dstack VMM stores for each CVM of the app (dstack VMM 0.6.1+). " +
+				"Not measured: tenants must not rely on it for security. Needs the `cvm_annotations` feature flag. " +
+				"Updated in place by replacing the whole map, without a restart; host tools that read annotations when the CVM " +
+				"starts see the change after the next restart. Removing the attribute clears the annotations.",
+		},
 	}
 }
 

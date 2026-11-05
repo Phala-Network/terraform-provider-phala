@@ -93,6 +93,22 @@ func patchCompose(ctx context.Context, client *phala.Client, cvmID string, req *
 	return nil
 }
 
+// putAnnotations replaces the annotations of each CVM; a null map clears them.
+func putAnnotations(ctx context.Context, client *phala.Client, cvmIDs []string, value types.Map) error {
+	annotations := map[string]string{}
+	if !value.IsNull() {
+		if diags := value.ElementsAs(ctx, &annotations, false); diags.HasError() {
+			return fmt.Errorf("read annotations: %v", diags)
+		}
+	}
+	for _, id := range cvmIDs {
+		if _, err := client.UpdateCVMAnnotations(ctx, id, annotations); err != nil {
+			return fmt.Errorf("update annotations on CVM %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
 // patchOf sets a changed key and removes one that is no longer configured.
 func patchOf[T comparable](desired, current *T) phala.Patch[T] {
 	switch {
