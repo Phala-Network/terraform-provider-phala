@@ -241,49 +241,6 @@ func ensureAppPrefix(v string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Compose-file update helpers
-// ---------------------------------------------------------------------------
-
-func provisionAndApplyComposeFileUpdate(
-	ctx context.Context,
-	client *phala.Client,
-	cvmID string,
-	provisionReq map[string]any,
-) error {
-	if strings.TrimSpace(cvmID) == "" {
-		return fmt.Errorf("missing cvm id for compose update")
-	}
-	if strings.TrimSpace(stringFromAny(provisionReq["name"])) == "" {
-		return fmt.Errorf("compose update requires non-empty name")
-	}
-
-	// Convert map[string]any to the SDK type via JSON round-trip.
-	provisionBody, err := json.Marshal(provisionReq)
-	if err != nil {
-		return fmt.Errorf("marshal compose provision request: %w", err)
-	}
-	sdkReq := &phala.ProvisionComposeUpdateRequest{}
-	if err := json.Unmarshal(provisionBody, sdkReq); err != nil {
-		return fmt.Errorf("convert compose provision request: %w", err)
-	}
-	resp, err := client.ProvisionCVMComposeFileUpdate(ctx, cvmID, sdkReq)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(resp.ComposeHash) == "" {
-		return fmt.Errorf("compose update provision did not return compose_hash")
-	}
-
-	commitReq := &phala.CommitComposeUpdateRequest{
-		ComposeHash: resp.ComposeHash,
-	}
-	if updateEnvVars, ok := provisionReq["update_env_vars"].(bool); ok && updateEnvVars {
-		commitReq.UpdateEnvVars = &updateEnvVars
-	}
-	return client.CommitCVMComposeFileUpdate(ctx, cvmID, commitReq)
-}
-
-// ---------------------------------------------------------------------------
 // Terraform-value helpers
 // ---------------------------------------------------------------------------
 

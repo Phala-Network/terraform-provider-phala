@@ -564,18 +564,17 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 
 	desiredComposeEnvKeys, desiredComposeEnvKeysKnown, envKeyDiags := composeEnvKeysFromAttrs(ctx, plan.Env, plan.EnvKeys)
 	resp.Diagnostics.Append(envKeyDiags...)
-	currentComposeEnvKeys, currentComposeEnvKeysKnown, envKeyDiags := composeEnvKeysFromAttrs(ctx, state.Env, state.EnvKeys)
+	currentComposeEnvKeys, _, envKeyDiags := composeEnvKeysFromAttrs(ctx, state.Env, state.EnvKeys)
 	resp.Diagnostics.Append(envKeyDiags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	composeEnvKeys := currentComposeEnvKeys
-	composeHasEnvKeys := currentComposeEnvKeysKnown
-	if desiredComposeEnvKeysKnown {
-		composeEnvKeys = desiredComposeEnvKeys
-		composeHasEnvKeys = true
-	}
 	updateComposeEnvKeys := desiredComposeEnvKeysKnown && !equalStringSlices(desiredComposeEnvKeys, currentComposeEnvKeys)
+	composeReq, composeDiags := buildComposeUpdateRequest(ctx, plan, state, desiredComposeEnvKeys, updateComposeEnvKeys)
+	resp.Diagnostics.Append(composeDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	cvms, err := r.fetchAppCVMs(ctx, appID)
 	if err != nil {
@@ -640,10 +639,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 			envChanged:      envChanged,
 			imageChanged:    imageChanged,
 			diskSizeChanged: diskSizeChanged,
-			composeEnvKeys:  composeEnvKeys,
-			composeHasKeys:  composeHasEnvKeys,
-			updateEnvKeys:   updateComposeEnvKeys,
-			settingsChanged: settingsChanged,
+			composeReq:      composeReq,
 			listedChanged:   listedChanged,
 		}); diags.HasError() {
 			resp.Diagnostics.Append(diags...)
@@ -661,10 +657,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 			envChanged:      envChanged,
 			imageChanged:    imageChanged,
 			diskSizeChanged: diskSizeChanged,
-			composeEnvKeys:  composeEnvKeys,
-			composeHasKeys:  composeHasEnvKeys,
-			updateEnvKeys:   updateComposeEnvKeys,
-			settingsChanged: settingsChanged,
+			composeReq:      composeReq,
 			listedChanged:   listedChanged,
 		}); diags.HasError() {
 			resp.Diagnostics.Append(diags...)
@@ -1354,17 +1347,6 @@ func appPath(id string) string {
 func appIDWithoutPrefix(id string) string {
 	trimmed := strings.TrimSpace(id)
 	return strings.TrimPrefix(trimmed, "app_")
-}
-
-func stringFromAny(v any) string {
-	switch t := v.(type) {
-	case string:
-		return strings.TrimSpace(t)
-	case fmt.Stringer:
-		return strings.TrimSpace(t.String())
-	default:
-		return ""
-	}
 }
 
 // buildUpdateEnvsRequest converts a generic env update map to the SDK type.

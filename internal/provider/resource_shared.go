@@ -265,14 +265,6 @@ func buildComposeFile(f composeFileFields) map[string]any {
 	return cf
 }
 
-func buildComposeFileUpdateRequest(f composeFileFields, updateEnvVars bool) map[string]any {
-	req := buildComposeFile(f)
-	if updateEnvVars {
-		req["update_env_vars"] = true
-	}
-	return req
-}
-
 // provisionFields holds the inputs needed to build a /cvms/provision request.
 type provisionFields struct {
 	Name           string

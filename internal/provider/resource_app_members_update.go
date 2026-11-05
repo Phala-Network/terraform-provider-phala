@@ -17,12 +17,12 @@ import (
 // resources that are in members (MIG) mode. Two complementary mechanisms,
 // determined by what the user changed:
 //
-//  1. Compose-body changes (docker_compose, pre_launch_script, public_*,
+//  1. Compose changes (docker_compose, pre_launch_script, public_*,
 //     gateway_enabled, secure_time, allowed_envs / env_keys) need a new
-//     revision because the compose hash is part of the cloud's app
-//     identity. We provision a new revision against the bootstrap CVM,
-//     resolve its revision_id from the app's revisions list, then call
-//     POST /apps/{id}/revisions/{rev}/redeploy with vm_uuids=[every CVM].
+//     revision because the compose hash is part of the cloud's app identity. We apply them to the bootstrap CVM with one unified
+//     PATCH /cvms/{id}, which records the revision, resolve its revision_id
+//     from the app's revisions list, then call
+//     POST /apps/{id}/revisions/{rev}/redeploy with vm_uuids=[every other CVM].
 //     The backend (see teehouse/cvms/actions/activate_revision.py) locks
 //     each CVM row, sets compose_hash in place, and enqueues the per-CVM
 //     update task — vm_uuid and name are preserved.
@@ -327,11 +327,10 @@ type applyMembersModeArgs struct {
 	envChanged      bool
 	imageChanged    bool
 	diskSizeChanged bool
-	composeEnvKeys  []string
-	composeHasKeys  bool
-	updateEnvKeys   bool
-	settingsChanged bool
-	listedChanged   bool
+	// composeReq is the compose update of this apply; nil when the compose
+	// does not change.
+	composeReq    *phala.PatchCVMRequest
+	listedChanged bool
 }
 
 type applySingleCVMArgs struct {
@@ -342,17 +341,15 @@ type applySingleCVMArgs struct {
 	envChanged      bool
 	imageChanged    bool
 	diskSizeChanged bool
-	composeEnvKeys  []string
-	composeHasKeys  bool
-	updateEnvKeys   bool
-	settingsChanged bool
-	listedChanged   bool
+	// composeReq is the compose update of this apply; nil when the compose
+	// does not change.
+	composeReq    *phala.PatchCVMRequest
+	listedChanged bool
 }
 
 // applyMembersModeUpdate is the slot-preserving update path for apps in
-// members (MIG) mode. Compose-body changes flow through one
-// provision+redeploy revision so every slot lands on the new compose
-// atomically; env value / image / resource changes fan out per-CVM.
+// members (MIG) mode. Compose changes flow through one bootstrap PATCH
+// plus a revision redeploy so every slot lands on the new compose; env value / image / resource changes fan out per-CVM.
 func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembersModeArgs) diag.Diagnostics {
 	var diags diag.Diagnostics
 	diags.Append(validateAppEnvUpdateScope(a.plan.EnvUpdateScope)...)
@@ -368,41 +365,10 @@ func (r *appResource) applyMembersModeUpdate(ctx context.Context, a applyMembers
 		return diags
 	}
 
-	composeChanged := a.settingsChanged ||
-		!a.plan.DockerCompose.Equal(a.state.DockerCompose) ||
-		!a.plan.PreLaunchScript.Equal(a.state.PreLaunchScript) ||
-		a.updateEnvKeys
-
-	if composeChanged {
-		composeReq := buildComposeFileUpdateRequest(composeFileFields{
-			Name:            a.plan.Name.ValueString(),
-			DockerCompose:   a.plan.DockerCompose.ValueString(),
-			PreLaunchScript: a.plan.PreLaunchScript,
-			PublicLogs:      a.plan.PublicLogs,
-			PublicSysinfo:   a.plan.PublicSysinfo,
-			PublicTCBInfo:   a.plan.PublicTCBInfo,
-			GatewayEnabled:  a.plan.GatewayEnabled,
-			SecureTime:      a.plan.SecureTime,
-			StorageFS:       a.plan.StorageFS,
-			EnvKeys:         a.composeEnvKeys,
-			HasEnvKeys:      a.composeHasKeys,
-		}, a.updateEnvKeys)
-
-		// The cloud's `compose_file/provision` endpoint only caches a
-		// compose_hash — it does NOT create a revision row in the app's
-		// revision history. The revision row is created when the compose
-		// actually gets applied to a CVM (via PATCH /compose_file). So
-		// the slot-preserving rollout is: apply to the bootstrap first
-		// (this creates the revision and updates the bootstrap CVM), then
-		// redeploy the same revision to every other slot.
-		if err := provisionAndApplyComposeFileUpdate(ctx, r.client, a.bootstrapID, composeReq); err != nil {
-			if apiErr, ok := err.(*phala.APIError); ok && apiErr.StatusCode == 465 {
-				diags.AddError(
-					"On-chain KMS not supported in members mode",
-					"PATCH /compose_file returned HTTP 465 (compose hash registration required); this provider supports kms = phala only for now.",
-				)
-				return diags
-			}
+	if a.composeReq != nil {
+		// Apply to the bootstrap first: that records the revision, which is
+		// then redeployed to every other slot.
+		if err := patchCompose(ctx, r.client, a.bootstrapID, a.composeReq); err != nil {
 			diags.AddError("Failed to apply new compose to bootstrap CVM", err.Error())
 			return diags
 		}
@@ -566,22 +532,9 @@ func (r *appResource) applySingleCVMUpdate(ctx context.Context, a applySingleCVM
 		}
 	}
 
-	if a.settingsChanged {
-		composeReq := buildComposeFileUpdateRequest(composeFileFields{
-			Name:            a.plan.Name.ValueString(),
-			DockerCompose:   a.plan.DockerCompose.ValueString(),
-			PreLaunchScript: a.plan.PreLaunchScript,
-			PublicLogs:      a.plan.PublicLogs,
-			PublicSysinfo:   a.plan.PublicSysinfo,
-			PublicTCBInfo:   a.plan.PublicTCBInfo,
-			GatewayEnabled:  a.plan.GatewayEnabled,
-			SecureTime:      a.plan.SecureTime,
-			StorageFS:       a.plan.StorageFS,
-			EnvKeys:         a.composeEnvKeys,
-			HasEnvKeys:      a.composeHasKeys,
-		}, a.updateEnvKeys)
-		if err := provisionAndApplyComposeFileUpdate(ctx, r.client, a.bootstrapID, composeReq); err != nil {
-			diags.AddError("Failed to update app compose settings", err.Error())
+	if a.composeReq != nil {
+		if err := patchCompose(ctx, r.client, a.bootstrapID, a.composeReq); err != nil {
+			diags.AddError("Failed to update app compose", err.Error())
 			return diags
 		}
 	}
@@ -593,24 +546,6 @@ func (r *appResource) applySingleCVMUpdate(ctx context.Context, a applySingleCVM
 		}
 		if err := r.client.UpdateOSImage(ctx, a.bootstrapID, &phala.UpdateOSImageRequest{OSImageName: a.plan.Image.ValueString()}); err != nil {
 			diags.AddError("Failed to update app OS image", err.Error())
-			return diags
-		}
-	}
-
-	if !a.plan.DockerCompose.Equal(a.state.DockerCompose) {
-		if _, err := r.client.UpdateDockerCompose(ctx, a.bootstrapID, a.plan.DockerCompose.ValueString(), nil); err != nil {
-			diags.AddError("Failed to update app docker compose", err.Error())
-			return diags
-		}
-	}
-
-	if !a.plan.PreLaunchScript.Equal(a.state.PreLaunchScript) {
-		script := ""
-		if !a.plan.PreLaunchScript.IsNull() && !a.plan.PreLaunchScript.IsUnknown() {
-			script = a.plan.PreLaunchScript.ValueString()
-		}
-		if _, err := r.client.UpdatePreLaunchScript(ctx, a.bootstrapID, script, nil); err != nil {
-			diags.AddError("Failed to update app pre-launch script", err.Error())
 			return diags
 		}
 	}

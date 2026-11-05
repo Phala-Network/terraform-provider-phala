@@ -318,48 +318,24 @@ const envUpdateTestPubkey = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af0
 
 const envUpdateCVMResponse = `{"vm_uuid":"cvm123","status":"running","name":"demo","instance_type":"tdx.small","kms":"phala","listed":false,"image_name":"ubuntu-24.04","disk_size":20,"region":"US-WEST-1","public_endpoint":"https://example.com","public_logs":false,"public_sysinfo":false,"public_tcbinfo":false,"gateway_enabled":false,"secure_time":false,"storage_fs":"ext4","encrypted_env_pubkey":"` + envUpdateTestPubkey + `"}`
 
+// envUpdateAppObjectType is the phala_app object type from the schema.
 func envUpdateAppObjectType() tftypes.Object {
-	return tftypes.Object{AttributeTypes: map[string]tftypes.Type{
-		"id":                     tftypes.String,
-		"app_id":                 tftypes.String,
-		"name":                   tftypes.String,
-		"region":                 tftypes.String,
-		"size":                   tftypes.String,
-		"image":                  tftypes.String,
-		"kms":                    tftypes.String,
-		"legacy_node_id":         tftypes.Number,
-		"node":                   tftypes.String,
-		"custom_app_id":          tftypes.String,
-		"nonce":                  tftypes.Number,
-		"public_logs":            tftypes.Bool,
-		"public_sysinfo":         tftypes.Bool,
-		"public_tcbinfo":         tftypes.Bool,
-		"gateway_enabled":        tftypes.Bool,
-		"secure_time":            tftypes.Bool,
-		"storage_fs":             tftypes.String,
-		"disk_size":              tftypes.Number,
-		"docker_compose":         tftypes.String,
-		"pre_launch_script":      tftypes.String,
-		"env":                    tftypes.Map{ElementType: tftypes.String},
-		"env_update_scope":       tftypes.String,
-		"encrypted_env":          tftypes.String,
-		"env_keys":               tftypes.List{ElementType: tftypes.String},
-		"env_compose_hash":       tftypes.String,
-		"env_transaction_hash":   tftypes.String,
-		"compose_hash":           tftypes.String,
-		"app_env_encrypt_pubkey": tftypes.String,
-		"listed":                 tftypes.Bool,
-		"wait_for_ready":         tftypes.Bool,
-		"wait_timeout_seconds":   tftypes.Number,
-		"status":                 tftypes.String,
-		"primary_cvm_id":         tftypes.String,
-		"cvm_ids":                tftypes.List{ElementType: tftypes.String},
-		"instances":              tftypes.List{ElementType: envUpdateInstanceObjectType()},
-		"endpoint":               tftypes.String,
-		"gateway_base_domain":    tftypes.String,
-		"gateway_cname":          tftypes.String,
-		"members":                tftypes.List{ElementType: tftypes.String},
-	}}
+	var resp resource.SchemaResponse
+	NewAppResource().Schema(context.Background(), resource.SchemaRequest{}, &resp)
+	return resp.Schema.Type().TerraformType(context.Background()).(tftypes.Object)
+}
+
+// appObjectValue builds a phala_app object; attributes not given are null.
+func appObjectValue(values map[string]tftypes.Value) tftypes.Value {
+	objType := envUpdateAppObjectType()
+	all := make(map[string]tftypes.Value, len(objType.AttributeTypes))
+	for name, typ := range objType.AttributeTypes {
+		all[name] = tftypes.NewValue(typ, nil)
+	}
+	for name, v := range values {
+		all[name] = v
+	}
+	return tftypes.NewValue(objType, all)
 }
 
 func envUpdateInstanceObjectType() tftypes.Object {
@@ -381,11 +357,10 @@ func envUpdateInstanceObjectType() tftypes.Object {
 
 func envUpdateConfigValue(t *testing.T, imageVal string) tftypes.Value {
 	t.Helper()
-	objType := envUpdateAppObjectType()
 	envTfVal := tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, map[string]tftypes.Value{
 		"IMAGE": tftypes.NewValue(tftypes.String, imageVal),
 	})
-	return tftypes.NewValue(objType, map[string]tftypes.Value{
+	return appObjectValue(map[string]tftypes.Value{
 		"id":                     tftypes.NewValue(tftypes.String, nil),
 		"app_id":                 tftypes.NewValue(tftypes.String, nil),
 		"name":                   tftypes.NewValue(tftypes.String, "env-drift-demo"),
@@ -430,11 +405,10 @@ func envUpdateConfigValue(t *testing.T, imageVal string) tftypes.Value {
 
 func envUpdateProposedCreate(t *testing.T, imageVal string) tftypes.Value {
 	t.Helper()
-	objType := envUpdateAppObjectType()
 	envTfVal := tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, map[string]tftypes.Value{
 		"IMAGE": tftypes.NewValue(tftypes.String, imageVal),
 	})
-	return tftypes.NewValue(objType, map[string]tftypes.Value{
+	return appObjectValue(map[string]tftypes.Value{
 		"id":                     tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
 		"app_id":                 tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
 		"name":                   tftypes.NewValue(tftypes.String, "env-drift-demo"),

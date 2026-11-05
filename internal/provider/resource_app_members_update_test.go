@@ -315,3 +315,65 @@ func TestWaitForCVMsOnComposeHashSucceedsOnAllSettled(t *testing.T) {
 		t.Fatalf("expected at least 2 polls, got %d", attempts.Load())
 	}
 }
+
+// TestMembersModeComposeUpdatePatchesBootstrapThenRedeploys asserts that a
+// members-mode compose change goes to the bootstrap as one unified PATCH
+// (keeping compose keys Terraform does not manage) and that the resulting
+// revision is redeployed to every other slot.
+func TestMembersModeComposeUpdatePatchesBootstrapThenRedeploys(t *testing.T) {
+	var mu sync.Mutex
+	var writes []string
+	var patchBody, redeployBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/api/v1")
+		if r.Method != http.MethodGet {
+			mu.Lock()
+			writes = append(writes, r.Method+" "+path)
+			mu.Unlock()
+		}
+		switch {
+		case r.Method == http.MethodPatch && path == "/cvms/vm-boot":
+			patchBody, _ = io.ReadAll(r.Body)
+			writeJSON(t, w, http.StatusAccepted, `{"status":"accepted","correlation_id":"c1"}`)
+		case r.Method == http.MethodGet && path == "/cvms/vm-boot":
+			writeJSON(t, w, http.StatusOK, `{"vm_uuid":"vm-boot","compose_hash":"newhash","status":"running"}`)
+		case r.Method == http.MethodGet && path == "/apps/test/revisions":
+			writeJSON(t, w, http.StatusOK, `{"revisions":[{"revision_id":"rev_9","compose_hash":"newhash"}],"total":1,"page":1,"page_size":50,"total_pages":1}`)
+		case r.Method == http.MethodPost && path == "/apps/test/revisions/rev_9/redeploy":
+			redeployBody, _ = io.ReadAll(r.Body)
+			writeJSON(t, w, http.StatusAccepted, `{"message":"ok"}`)
+		case r.Method == http.MethodGet && path == "/apps/test/cvms":
+			writeJSON(t, w, http.StatusOK, `[
+				{"vm_uuid":"vm-boot","compose_hash":"newhash","status":"running"},
+				{"vm_uuid":"vm-peer","compose_hash":"newhash","status":"running"}
+			]`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	r := &appResource{client: newTestPhalaClient(t, srv.URL+"/api/v1")}
+	swap := "4G"
+	diags := r.applyMembersModeUpdate(context.Background(), applyMembersModeArgs{
+		appID:       "app_test",
+		bootstrapID: "vm-boot",
+		vmUUIDs:     []string{"vm-boot", "vm-peer"},
+		plan:        appResourceModel{WaitTimeoutSecond: types.Int64Value(30)},
+		composeReq:  &phala.PatchCVMRequest{Compose: &phala.ComposePatch{SwapSize: phala.PatchValue(swap)}},
+	})
+	if diags.HasError() {
+		t.Fatalf("applyMembersModeUpdate: %v", diags)
+	}
+	want := []string{"PATCH /cvms/vm-boot", "POST /apps/test/revisions/rev_9/redeploy"}
+	if strings.Join(writes, ",") != strings.Join(want, ",") {
+		t.Fatalf("writes = %v, want %v", writes, want)
+	}
+	if string(patchBody) != `{"compose":{"swap_size":"4G"}}` {
+		t.Fatalf("PATCH body = %s", patchBody)
+	}
+	if string(redeployBody) != `{"vm_uuids":["vm-peer"]}` {
+		t.Fatalf("redeploy body = %s", redeployBody)
+	}
+}
