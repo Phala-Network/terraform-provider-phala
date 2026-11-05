@@ -19,7 +19,13 @@ func buildComposeUpdateRequest(
 	envKeys []string,
 	updateEnvKeys bool,
 ) (*phala.PatchCVMRequest, diag.Diagnostics) {
-	var diags diag.Diagnostics
+	desired, diags := readComposeConfig(ctx, plan)
+	current, currentDiags := readComposeConfig(ctx, state)
+	diags.Append(currentDiags...)
+	if diags.HasError() {
+		return nil, diags
+	}
+
 	req := &phala.PatchCVMRequest{}
 	changed := false
 	if !plan.DockerCompose.Equal(state.DockerCompose) {
@@ -51,18 +57,27 @@ func buildComposeUpdateRequest(
 		}
 	}
 
-	patch := phala.ComposePatch{
-		GatewayEnabled: patchOf(boolPtrValue(plan.GatewayEnabled), boolPtrValue(state.GatewayEnabled)),
-		SecureTime:     patchOf(boolPtrValue(plan.SecureTime), boolPtrValue(state.SecureTime)),
-	}
+	patch := composePatchFrom(desired, current)
+	patch.GatewayEnabled = patchOf(boolPtrValue(plan.GatewayEnabled), boolPtrValue(state.GatewayEnabled))
+	patch.SecureTime = patchOf(boolPtrValue(plan.SecureTime), boolPtrValue(state.SecureTime))
 	if !reflect.DeepEqual(patch, phala.ComposePatch{}) {
 		req.Compose = &patch
+		changed = true
+	}
+
+	if !plan.InitScripts.Equal(state.InitScripts) {
+		// A non-nil empty list removes every script.
+		req.InitScripts = desired.InitScripts
+		if req.InitScripts == nil {
+			req.InitScripts = []phala.InitScriptSlug{}
+		}
 		changed = true
 	}
 
 	if !changed {
 		return nil, diags
 	}
+	req.ConfirmDataWipe = plan.ConfirmDataWipe.ValueBool()
 	return req, diags
 }
 

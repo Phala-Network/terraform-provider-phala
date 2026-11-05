@@ -776,6 +776,7 @@ func TestComposeHashInputsChanged(t *testing.T) {
 			GatewayEnabled: types.BoolValue(true),
 			SecureTime:     types.BoolValue(false),
 			EnvKeys:        types.ListValueMust(types.StringType, []attr.Value{types.StringValue("A")}),
+			InitScripts:    types.SetNull(types.StringType),
 		}
 	}
 	for _, tc := range []struct {
@@ -817,6 +818,13 @@ func TestComposeHashInputsChanged(t *testing.T) {
 		}, nil, true},
 		{"empty allowlist", func(m *appResourceModel) {
 			m.EnvKeys = types.ListValueMust(types.StringType, []attr.Value{})
+		}, nil, true},
+		{"swap size", func(m *appResourceModel) { m.SwapSize = types.StringValue("2G") }, nil, true},
+		{"requirements", func(m *appResourceModel) {
+			m.Requirements = types.ObjectUnknown(map[string]attr.Type{})
+		}, nil, true},
+		{"init scripts", func(m *appResourceModel) {
+			m.InitScripts = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("docker_cleanup")})
 		}, nil, true},
 		{"ciphertext only", func(m *appResourceModel) { m.EncryptedEnv = types.StringValue("deadbeef") }, nil, false},
 		{"placement only", func(m *appResourceModel) { m.Size = types.StringValue("tdx.large") }, nil, false},

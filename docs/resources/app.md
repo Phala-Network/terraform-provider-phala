@@ -70,11 +70,35 @@ Downstream `phala_app_instance` resources should set `for_each = toset(phala_app
 
 `phala_app.Update` propagates mutable-field changes across every CVM in a members-mode app while preserving slot identity (`vm_uuid` and `name` are unchanged):
 
-- **Compose-body changes** (`docker_compose`, `pre_launch_script`, `public_*`, `gateway_enabled`, `secure_time`, env-key list changes) go through the cloud's app-revision endpoint. The provider applies them to the bootstrap CVM with one `PATCH /cvms/{id}` that sends only the changed keys (creating a new revision row), then `POST /apps/{id}/revisions/{rev}/redeploy` fans the same revision out to every other slot. Each CVM's `compose_hash` flips to the new value; nothing is destroyed and recreated.
+- **Compose changes** (`docker_compose`, `pre_launch_script`, `public_*`, `gateway_enabled`, `secure_time`, env-key list changes, the compose settings below, `init_scripts`) go through the cloud's app-revision endpoint. The provider applies them to the bootstrap CVM with one `PATCH /cvms/{id}` that sends only the changed keys (creating a new revision row), then `POST /apps/{id}/revisions/{rev}/redeploy` fans the same revision out to every other slot. Each CVM's `compose_hash` flips to the new value; nothing is destroyed and recreated.
 - **Env value changes** use a per-CVM `PATCH /cvms/{uuid}/envs` fan-out by default. Set `env_update_scope = "bootstrap"` when `phala_app_instance` resources own the other slots' environments. The parent then updates only its bootstrap CVM and leaves per-slot values intact. `compose_hash` stays unchanged.
 - **OS image, instance size, and disk size changes** fan out via `PATCH /cvms/{uuid}/os-image` and `PATCH /cvms/{uuid}/resources` respectively — the cloud has no app-level analog. Sequential, fail-fast.
 
 The one structural change still blocked is **removing the `members` attribute** from a previously-members-mode app: that would leave the `phala_app_instance` slots orphaned. The provider blocks this at plan time and asks you to destroy and recreate.
+
+## Compose settings and init scripts
+
+- Every compose change of one apply is sent as a single `PATCH /cvms/{id}` whose `compose` object is a JSON Merge Patch: only changed keys are sent, a removed attribute is sent as `null`, and compose keys the provider does not manage stay as they are.
+- `runner`, `bash_script` and `requirements.gpu_policy` cannot be changed after create; changing them replaces the app. `storage_fs` was already force-new.
+- `port_policy`, `swap_size`, `storage_discard`, `snapshotter`, `event_log_version`, `gateway_enabled`, `secure_time`, the other `requirements` keys and `init_scripts` update in place with a restart. Turning on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk` for an existing app erases data on every boot and needs `confirm_data_wipe = true`.
+- These settings are kept as configured in state; the provider does not read them back from the cloud.
+
+### Bash runner example
+
+```hcl
+resource "phala_app" "job" {
+  name           = "batch-job"
+  size           = "tdx.small"
+  runner         = "bash" # needs the compose_advanced feature flag
+  docker_compose = ""
+  bash_script    = file("${path.module}/job.sh")
+
+  requirements = {
+    health_check       = true
+    health_status_file = "/run/health"
+  }
+}
+```
 
 ## Public URL composition
 
@@ -103,6 +127,8 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 
 ### Optional
 
+- `bash_script` (String) Script the `bash` runner executes instead of a Docker Compose file; set `docker_compose = ""` with it. Changing this forces replacement.
+- `confirm_data_wipe` (Boolean) Confirms an update that turns on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk`, which erase data on every boot. Not needed on create.
 - `custom_app_id` (String) Optional custom app_id for deterministic identity flow. Changing this forces replacement.
 - `disk_size` (Number) Disk size in GB.
 - `encrypted_env` (String, Sensitive) Hex-encoded encrypted env payload (manual mode).
@@ -111,20 +137,28 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `env_keys` (List of String) Measured allowed environment variable keys. Use with encrypted_env, or declare keys alone when phala_cvm_env manages values separately. Do not combine with inline env.
 - `env_transaction_hash` (String) Optional on-chain transaction hash for phase-2 encrypted env update flow (contract-owned KMS; used with env_compose_hash).
 - `env_update_scope` (String) Target of environment value updates: `all` (default) or `bootstrap`. Use `bootstrap` when phala_app_instance resources own per-slot environments; the parent then updates only its own bootstrap CVM. This does not change compose revision rollout scope.
+- `event_log_version` (Number) Event log format version, `1` or `2`. Relying parties that verify this app must support the chosen version. Changing it triggers compose update/restart.
 - `gateway_enabled` (Boolean) Enable public gateway routing (compose file setting). Changing this triggers compose update/restart.
 - `image` (String) OS image name.
+- `init_scripts` (Set of String) Platform init scripts every CVM of the app runs on boot: `docker_cleanup` (erases all container images and volumes on every boot) and `env_merge` (feature-flagged). Changing it triggers compose update/restart; turning `docker_cleanup` on for an existing app also needs `confirm_data_wipe = true`. Removing the attribute removes every script.
 - `kms` (String) KMS type for app provisioning (`phala`, `ethereum`, `base`). Changing this forces replacement.
 - `listed` (Boolean) Whether the app's CVM(s) are publicly listed in the marketplace. Updated in place via `PATCH /cvms/{uuid}/listed` (a plain metadata flag — no redeploy, no restart, no attestation change), fanned out across every slot in members mode.
 - `members` (List of String) Optional list of stable slot names this app's replica set is composed of (MIG-style usage). When set, `name` must be one of these values, and `replicas` must be unset or 1 — the legacy anonymous-replica path is incompatible with named slots. Downstream `phala_app_instance` resources should derive their `for_each` from this attribute so the slot list is the single source of truth.
 - `node` (String) Physical node name for initial placement. When omitted on creation, placement is automatic. Omitting it later retains the stored placement. Changing the name forces replacement.
 - `nonce` (Number) Optional nonce paired with custom_app_id for PHALA KMS deterministic app_id flow. Changing this forces replacement.
+- `port_policy` (Attributes) Which guest ports the dstack gateway forwards (compose `port_policy`, dstack OS 0.5.9+). Changing it triggers compose update/restart. (see [below for nested schema](#nestedatt--port_policy))
 - `pre_launch_script` (String) Optional pre-launch script content.
 - `public_logs` (Boolean) Expose container logs publicly (compose file setting). Changing this triggers compose update/restart.
 - `public_sysinfo` (Boolean) Expose system info publicly (compose file setting). Changing this triggers compose update/restart.
 - `public_tcbinfo` (Boolean) Expose TCB attestation info publicly (compose file setting). Changing this triggers compose update/restart.
 - `region` (String) Preferred region identifier. Force-new.
+- `requirements` (Attributes) Guest requirements (compose `requirements`, dstack OS 0.6.0+). Only the keys you set are written to the compose. Changing a key other than `gpu_policy` triggers compose update/restart. (see [below for nested schema](#nestedatt--requirements))
+- `runner` (String) How the guest runs the app: `docker-compose` (default), `nerdctl-compose` (dstack OS 0.6.0+) or `bash`. Runners other than `docker-compose` need the `compose_advanced` feature flag. Changing this forces replacement.
 - `secure_time` (Boolean) Enable secure time mode (compose file setting). Changing this triggers compose update/restart.
+- `snapshotter` (String) Container snapshotter, `overlayfs` or `stargz`. Only with `runner = "nerdctl-compose"`. Changing it triggers compose update/restart.
+- `storage_discard` (Boolean) Pass discard (TRIM) through to the data disk. Changing it triggers compose update/restart.
 - `storage_fs` (String) Storage filesystem for deployment (`zfs` or `ext4`). Immutable after initial deployment.
+- `swap_size` (String) Guest swap size, e.g. `2G`. Changing it triggers compose update/restart.
 - `wait_for_ready` (Boolean) Wait until status is running after create/update.
 - `wait_timeout_seconds` (Number) Wait timeout for async operations.
 
@@ -142,6 +176,52 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 - `legacy_node_id` (Number) Internal state migration field for a legacy teepod ID.
 - `primary_cvm_id` (String) Bootstrap CVM identifier — the CVM created by `phala_app` itself, which in members (MIG) mode is also the slot whose name equals `phala_app.name`. Use env_update_scope to select the target scope of environment value updates.
 - `status` (String) Current CVM status.
+
+<a id="nestedatt--port_policy"></a>
+### Nested Schema for `port_policy`
+
+Optional:
+
+- `ports` (Attributes List) Ports the gateway forwards. (see [below for nested schema](#nestedatt--port_policy--ports))
+- `restrict_mode` (Boolean) Forward only the listed ports. Unset means `false`.
+
+<a id="nestedatt--port_policy--ports"></a>
+### Nested Schema for `port_policy.ports`
+
+Required:
+
+- `port` (Number) Guest port.
+
+Optional:
+
+- `pp` (Boolean) Send the PROXY protocol header to this port. Unset means `false`.
+
+
+
+<a id="nestedatt--requirements"></a>
+### Nested Schema for `requirements`
+
+Optional:
+
+- `ephemeral_data_disk` (Boolean) Format the data disk on every boot (dstack OS 0.6.3+). Turning it on for an existing app also needs `confirm_data_wipe = true`.
+- `gpu_policy` (Attributes) GPU policy the guest enforces. Needs the `compose_gpu_policy` feature flag. Changing this forces replacement. (see [below for nested schema](#nestedatt--requirements--gpu_policy))
+- `health_check` (Boolean) Report app health to the host. With `runner = "bash"` it needs `health_status_file`.
+- `health_status_file` (String) File the guest reads the app's health from.
+- `platforms` (List of String) Platforms the app may run on. Unset allows any; an empty list allows none.
+- `tdx_measure_acpi_tables` (Boolean) Measure the ACPI tables into the TDX RTMRs.
+
+<a id="nestedatt--requirements--gpu_policy"></a>
+### Nested Schema for `requirements.gpu_policy`
+
+Optional:
+
+- `allow_debug` (Boolean)
+- `allow_devtools` (Boolean)
+- `allow_insecure_boot` (Boolean)
+- `attest_gpu` (Boolean)
+- `rego` (String)
+
+
 
 <a id="nestedatt--instances"></a>
 ### Nested Schema for `instances`

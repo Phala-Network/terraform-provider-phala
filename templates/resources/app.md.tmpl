@@ -34,11 +34,35 @@ Downstream `phala_app_instance` resources should set `for_each = toset(phala_app
 
 `phala_app.Update` propagates mutable-field changes across every CVM in a members-mode app while preserving slot identity (`vm_uuid` and `name` are unchanged):
 
-- **Compose-body changes** (`docker_compose`, `pre_launch_script`, `public_*`, `gateway_enabled`, `secure_time`, env-key list changes) go through the cloud's app-revision endpoint. The provider applies them to the bootstrap CVM with one `PATCH /cvms/{id}` that sends only the changed keys (creating a new revision row), then `POST /apps/{id}/revisions/{rev}/redeploy` fans the same revision out to every other slot. Each CVM's `compose_hash` flips to the new value; nothing is destroyed and recreated.
+- **Compose changes** (`docker_compose`, `pre_launch_script`, `public_*`, `gateway_enabled`, `secure_time`, env-key list changes, the compose settings below, `init_scripts`) go through the cloud's app-revision endpoint. The provider applies them to the bootstrap CVM with one `PATCH /cvms/{id}` that sends only the changed keys (creating a new revision row), then `POST /apps/{id}/revisions/{rev}/redeploy` fans the same revision out to every other slot. Each CVM's `compose_hash` flips to the new value; nothing is destroyed and recreated.
 - **Env value changes** use a per-CVM `PATCH /cvms/{uuid}/envs` fan-out by default. Set `env_update_scope = "bootstrap"` when `phala_app_instance` resources own the other slots' environments. The parent then updates only its bootstrap CVM and leaves per-slot values intact. `compose_hash` stays unchanged.
 - **OS image, instance size, and disk size changes** fan out via `PATCH /cvms/{uuid}/os-image` and `PATCH /cvms/{uuid}/resources` respectively — the cloud has no app-level analog. Sequential, fail-fast.
 
 The one structural change still blocked is **removing the `members` attribute** from a previously-members-mode app: that would leave the `phala_app_instance` slots orphaned. The provider blocks this at plan time and asks you to destroy and recreate.
+
+## Compose settings and init scripts
+
+- Every compose change of one apply is sent as a single `PATCH /cvms/{id}` whose `compose` object is a JSON Merge Patch: only changed keys are sent, a removed attribute is sent as `null`, and compose keys the provider does not manage stay as they are.
+- `runner`, `bash_script` and `requirements.gpu_policy` cannot be changed after create; changing them replaces the app. `storage_fs` was already force-new.
+- `port_policy`, `swap_size`, `storage_discard`, `snapshotter`, `event_log_version`, `gateway_enabled`, `secure_time`, the other `requirements` keys and `init_scripts` update in place with a restart. Turning on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk` for an existing app erases data on every boot and needs `confirm_data_wipe = true`.
+- These settings are kept as configured in state; the provider does not read them back from the cloud.
+
+### Bash runner example
+
+```hcl
+resource "phala_app" "job" {
+  name           = "batch-job"
+  size           = "tdx.small"
+  runner         = "bash" # needs the compose_advanced feature flag
+  docker_compose = ""
+  bash_script    = file("${path.module}/job.sh")
+
+  requirements = {
+    health_check       = true
+    health_status_file = "/run/health"
+  }
+}
+```
 
 ## Public URL composition
 

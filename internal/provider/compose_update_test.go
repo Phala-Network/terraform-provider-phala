@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -38,6 +39,7 @@ func TestBuildComposeUpdateRequest(t *testing.T) {
 			PublicTCBInfo:   types.BoolValue(true),
 			GatewayEnabled:  types.BoolValue(true),
 			SecureTime:      types.BoolValue(false),
+			InitScripts:     types.SetNull(types.StringType),
 		}
 	}
 	for _, tc := range []struct {
@@ -58,6 +60,7 @@ func TestBuildComposeUpdateRequest(t *testing.T) {
 			m.SecureTime = types.BoolValue(true)
 		}, nil, false, `{"public_logs":false,"compose":{"gateway_enabled":false,"secure_time":true}}`},
 		{"env keys", func(*appResourceModel) {}, []string{"A", "B"}, true, `{"allowed_envs":["A","B"]}`},
+		{"confirmation alone", func(m *appResourceModel) { m.ConfirmDataWipe = types.BoolValue(true) }, nil, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -80,4 +83,13 @@ func TestBuildComposeUpdateRequest(t *testing.T) {
 			assertJSONEqual(t, "PATCH body", req, tc.want)
 		})
 	}
+
+	// Removing init_scripts sends an empty list, which removes every script.
+	state := base()
+	state.InitScripts = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("docker_cleanup")})
+	req, diags := buildComposeUpdateRequest(ctx, base(), state, nil, false)
+	if diags.HasError() || req == nil {
+		t.Fatalf("req=%v diags=%v", req, diags)
+	}
+	assertJSONEqual(t, "PATCH body", req, `{"init_scripts":[]}`)
 }

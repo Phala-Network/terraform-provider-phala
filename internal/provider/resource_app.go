@@ -69,6 +69,16 @@ type appResourceModel struct {
 	GatewayBaseDomain   types.String `tfsdk:"gateway_base_domain"`
 	GatewayCname        types.String `tfsdk:"gateway_cname"`
 	Members             types.List   `tfsdk:"members"`
+	PortPolicy          types.Object `tfsdk:"port_policy"`
+	SwapSize            types.String `tfsdk:"swap_size"`
+	StorageDiscard      types.Bool   `tfsdk:"storage_discard"`
+	Snapshotter         types.String `tfsdk:"snapshotter"`
+	EventLogVersion     types.Int64  `tfsdk:"event_log_version"`
+	Runner              types.String `tfsdk:"runner"`
+	BashScript          types.String `tfsdk:"bash_script"`
+	Requirements        types.Object `tfsdk:"requirements"`
+	InitScripts         types.Set    `tfsdk:"init_scripts"`
+	ConfirmDataWipe     types.Bool   `tfsdk:"confirm_data_wipe"`
 }
 
 type appInstanceModel struct {
@@ -123,6 +133,9 @@ func (r *appResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 
 func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	attrs := sharedCVMSchemaAttrs()
+	for name, attribute := range composeConfigSchemaAttrs() {
+		attrs[name] = attribute
+	}
 	// Status can change when readiness is enabled after asynchronous creation.
 	attrs["status"] = schema.StringAttribute{
 		Computed:            true,
@@ -315,7 +328,8 @@ func composeHashInputsChanged(ctx context.Context, plan, state, config appResour
 	// explicitly configured unknown input can resolve differently at apply.
 	if config.Image.IsUnknown() || config.PublicLogs.IsUnknown() ||
 		config.PublicSysinfo.IsUnknown() || config.PublicTCBInfo.IsUnknown() ||
-		config.GatewayEnabled.IsUnknown() || config.SecureTime.IsUnknown() {
+		config.GatewayEnabled.IsUnknown() || config.SecureTime.IsUnknown() ||
+		composeConfigChanged(plan, state, config) {
 		return true, nil
 	}
 	planSettings := composeSettingsValues{
@@ -405,6 +419,10 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		resp.Diagnostics.AddError("Invalid provision parameters", err.Error())
 		return
 	}
+	resp.Diagnostics.Append(applyCreateConfig(ctx, plan, provReq)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	provResp, err := r.client.ProvisionCVM(ctx, provReq)
 	if err != nil {
@@ -480,6 +498,17 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		plan.LegacyNodeID = types.Int64Null()
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+}
+
+// applyCreateConfig adds the compose settings and init scripts to a create
+// request.
+func applyCreateConfig(ctx context.Context, plan appResourceModel, req *phala.ProvisionCVMRequest) diag.Diagnostics {
+	composeCfg, diags := readComposeConfig(ctx, plan)
+	if diags.HasError() {
+		return diags
+	}
+	composeCfg.applyTo(req)
+	return diags
 }
 
 func (r *appResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -570,11 +599,6 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 	updateComposeEnvKeys := desiredComposeEnvKeysKnown && !equalStringSlices(desiredComposeEnvKeys, currentComposeEnvKeys)
-	composeReq, composeDiags := buildComposeUpdateRequest(ctx, plan, state, desiredComposeEnvKeys, updateComposeEnvKeys)
-	resp.Diagnostics.Append(composeDiags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
 
 	cvms, err := r.fetchAppCVMs(ctx, appID)
 	if err != nil {
@@ -588,6 +612,12 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	bootstrapID := selectPrimaryIdentifier(plan.PrimaryCVMID, state.PrimaryCVMID, cvms, plan.Name.ValueString())
 	if bootstrapID == "" {
 		resp.Diagnostics.AddError("No CVM found for app", "App has no CVMs available for update operations.")
+		return
+	}
+
+	composeReq, composeDiags := buildComposeUpdateRequest(ctx, plan, state, desiredComposeEnvKeys, updateComposeEnvKeys)
+	resp.Diagnostics.Append(composeDiags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
