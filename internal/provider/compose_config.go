@@ -146,10 +146,12 @@ func composeConfigSchemaAttrs() map[string]schema.Attribute {
 		"annotations": schema.MapAttribute{
 			Optional:    true,
 			ElementType: types.StringType,
-			MarkdownDescription: "Host-side key/value metadata the dstack VMM stores for each CVM of the app (dstack VMM 0.6.1+). " +
+			MarkdownDescription: "Host-side key/value metadata the dstack VMM stores per VM (dstack VMM 0.6.1+). " +
 				"Not measured: tenants must not rely on it for security. Needs the `cvm_annotations` feature flag. " +
-				"Updated in place by replacing the whole map, without a restart; host tools that read annotations when the CVM " +
-				"starts see the change after the next restart. Removing the attribute clears the annotations.",
+				"Applied to the app's bootstrap CVM at create, and to the app's existing CVMs when the attribute changes, by " +
+				"replacing the whole map without a restart; host tools that read annotations when the CVM starts see the change " +
+				"after the next restart. CVMs added later, such as `phala_app_instance` slots, do not inherit them. " +
+				"Removing the attribute clears the annotations on the existing CVMs.",
 		},
 		"launch_token": schema.StringAttribute{
 			Optional:  true,

@@ -8,7 +8,7 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 - `phala_app` supports the newer app compose settings: `port_policy`, `swap_size`, `storage_discard`, `snapshotter`, `event_log_version`, `requirements` (`health_check`, `health_status_file`, `platforms`, `tdx_measure_acpi_tables`, `ephemeral_data_disk`, and create-only `gpu_policy`), create-only `runner` and `bash_script`, and `init_scripts` with `confirm_data_wipe` for updates that erase data on every boot. Compose changes are sent as one `PATCH /cvms/{id}` merge patch, so the provider no longer rebuilds the whole compose on update.
 
-- `phala_app.annotations` sets host-side CVM annotations (needs the `cvm_annotations` feature flag). Changes replace the whole map on every CVM of the app without a restart.
+- `phala_app.annotations` sets host-side CVM annotations (needs the `cvm_annotations` feature flag). They are per-VM host settings: the bootstrap CVM gets them at create, a change replaces the whole map on the app's existing CVMs without a restart, and CVMs added later start without them.
 
 - `phala_app.launch_token` gates every CVM of the app with a launch token that you supply, or that Phala Cloud generates with `generate_launch_token = true`. The token is stored in state as a sensitive value. Changing it rotates the token and updates each CVM's `requirements.launch_token_hash`; removing it removes the hash, then the token.
 
