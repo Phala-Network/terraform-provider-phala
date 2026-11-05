@@ -25,7 +25,11 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: Phala-Network/phala-cloud
-          ref: main
+          # Last phala-cloud main commit this provider builds against. Later
+          # SDK commits replace teepod/node IDs with physical node names
+          # (phala-cloud #532, #538); move back to main once the provider
+          # adopts node-name placement.
+          ref: 32cd8b15f6e9639f972e5c8185ad2c9617bea14d
           path: phala-cloud
           sparse-checkout: go
           sparse-checkout-cone-mode: true
