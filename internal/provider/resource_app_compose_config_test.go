@@ -522,7 +522,7 @@ func TestAppResourceRejectedLaunchTokenStaysOutOfDiagnostics(t *testing.T) {
 }
 
 // TestAppResourceComposeConfigForceNew asserts that exactly the settings the
-// backend cannot update (runner, bash_script, requirements.gpu_policy) plan a
+// backend cannot update (runner, requirements.gpu_policy) plan a
 // replacement, and that the other compose settings update in place.
 func TestAppResourceComposeConfigForceNew(t *testing.T) {
 	api := newComposeConfigAPI(t)
@@ -537,7 +537,7 @@ func TestAppResourceComposeConfigForceNew(t *testing.T) {
 		forceNew bool
 	}{
 		{"runner", tftypes.NewValue(tftypes.String, "nerdctl-compose"), true},
-		{"bash_script", tftypes.NewValue(tftypes.String, "echo hi"), true},
+		{"bash_script", tftypes.NewValue(tftypes.String, "echo hi"), false},
 		{"requirements", h.object("requirements", map[string]tftypes.Value{
 			"gpu_policy": nestedObject(gpuPolicyType, map[string]tftypes.Value{"attest_gpu": tftypes.NewValue(tftypes.Bool, true)}),
 		}), true},

@@ -60,6 +60,9 @@ func TestBuildComposeUpdateRequest(t *testing.T) {
 			m.GatewayEnabled = types.BoolValue(false)
 			m.SecureTime = types.BoolValue(true)
 		}, nil, false, `{"public_logs":false,"compose":{"gateway_enabled":false,"secure_time":true}}`},
+		{"bash script", func(m *appResourceModel) {
+			m.BashScript = types.StringValue("echo new")
+		}, nil, false, `{"compose":{"bash_script":"echo new"}}`},
 		{"env keys", func(*appResourceModel) {}, []string{"A", "B"}, true, `{"allowed_envs":["A","B"]}`},
 		{"confirmation alone", func(m *appResourceModel) { m.ConfirmDataWipe = types.BoolValue(true) }, nil, false, ""},
 	} {

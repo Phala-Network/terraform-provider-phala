@@ -17,9 +17,9 @@ import (
 
 // This file maps the app compose settings beyond the docker compose file,
 // scripts and visibility flags. The backend decides which of them an update
-// may change (docs: CVM configuration update API, section 3); runner,
-// bash_script and requirements.gpu_policy have no update path, so changing
-// them replaces the app. Every other setting is sent as a JSON Merge Patch
+// may change (docs: CVM configuration update API, section 3); runner and
+// requirements.gpu_policy have no update path, so changing them replaces the
+// app. Every other setting is sent as a JSON Merge Patch
 // through the unified PATCH /cvms/{id}, which keeps compose keys Terraform
 // does not manage, such as requirements.launch_token_hash.
 
@@ -80,8 +80,7 @@ func composeConfigSchemaAttrs() map[string]schema.Attribute {
 		"bash_script": schema.StringAttribute{
 			Optional: true,
 			MarkdownDescription: "Script the `bash` runner executes instead of a Docker Compose file; set `docker_compose = \"\"` with it. " +
-				"Changing this forces replacement.",
-			PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				"Changing it triggers compose update/restart.",
 		},
 		"requirements": schema.SingleNestedAttribute{
 			Optional: true,
@@ -334,10 +333,11 @@ func (c composeConfig) applyTo(req *phala.ProvisionCVMRequest) {
 }
 
 // composePatchFrom returns the merge patch that turns the current settings into
-// the desired ones. Runner, bash_script and gpu_policy force replacement, so
-// they never reach an update.
+// the desired ones. Runner and gpu_policy force replacement, so they never
+// reach an update.
 func composePatchFrom(desired, current composeConfig, launchTokenHash phala.Patch[string]) phala.ComposePatch {
 	patch := phala.ComposePatch{
+		BashScript:      patchOf(desired.BashScript, current.BashScript),
 		SwapSize:        patchOf(desired.SwapSize, current.SwapSize),
 		StorageDiscard:  patchOf(desired.StorageDiscard, current.StorageDiscard),
 		Snapshotter:     patchOf(desired.Snapshotter, current.Snapshotter),
@@ -391,6 +391,7 @@ func composeConfigChanged(plan, state, config appResourceModel) bool {
 		{config.StorageDiscard, plan.StorageDiscard, state.StorageDiscard},
 		{config.Snapshotter, plan.Snapshotter, state.Snapshotter},
 		{config.EventLogVersion, plan.EventLogVersion, state.EventLogVersion},
+		{config.BashScript, plan.BashScript, state.BashScript},
 		{config.Requirements, plan.Requirements, state.Requirements},
 		{config.InitScripts, plan.InitScripts, state.InitScripts},
 		{config.LaunchToken, plan.LaunchToken, state.LaunchToken},
