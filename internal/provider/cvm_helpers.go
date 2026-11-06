@@ -241,49 +241,6 @@ func ensureAppPrefix(v string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Compose-file update helpers
-// ---------------------------------------------------------------------------
-
-func provisionAndApplyComposeFileUpdate(
-	ctx context.Context,
-	client *phala.Client,
-	cvmID string,
-	provisionReq map[string]any,
-) error {
-	if strings.TrimSpace(cvmID) == "" {
-		return fmt.Errorf("missing cvm id for compose update")
-	}
-	if strings.TrimSpace(stringFromAny(provisionReq["name"])) == "" {
-		return fmt.Errorf("compose update requires non-empty name")
-	}
-
-	// Convert map[string]any to the SDK type via JSON round-trip.
-	provisionBody, err := json.Marshal(provisionReq)
-	if err != nil {
-		return fmt.Errorf("marshal compose provision request: %w", err)
-	}
-	sdkReq := &phala.ProvisionComposeUpdateRequest{}
-	if err := json.Unmarshal(provisionBody, sdkReq); err != nil {
-		return fmt.Errorf("convert compose provision request: %w", err)
-	}
-	resp, err := client.ProvisionCVMComposeFileUpdate(ctx, cvmID, sdkReq)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(resp.ComposeHash) == "" {
-		return fmt.Errorf("compose update provision did not return compose_hash")
-	}
-
-	commitReq := &phala.CommitComposeUpdateRequest{
-		ComposeHash: resp.ComposeHash,
-	}
-	if updateEnvVars, ok := provisionReq["update_env_vars"].(bool); ok && updateEnvVars {
-		commitReq.UpdateEnvVars = &updateEnvVars
-	}
-	return client.CommitCVMComposeFileUpdate(ctx, cvmID, commitReq)
-}
-
-// ---------------------------------------------------------------------------
 // Terraform-value helpers
 // ---------------------------------------------------------------------------
 
@@ -626,6 +583,40 @@ func diagnosticFromAPIError(fallbackSummary string, err error) (string, string) 
 		return fmt.Sprintf("[%s] %s", apiErr.ErrorCode, apiErr.Message), apiErr.FormatError()
 	}
 	return fallbackSummary, apiErr.Error()
+}
+
+// diagnosticWithoutInput is diagnosticFromAPIError for requests that carry a
+// secret, such as a launch token. Validation errors echo the submitted value
+// (FastAPI detail[].input, structured details[].value), so only the field and
+// the reason are kept.
+func diagnosticWithoutInput(fallbackSummary string, err error) (string, string) {
+	apiErr, ok := err.(*phala.APIError)
+	if !ok {
+		return fallbackSummary, err.Error()
+	}
+	var reasons []string
+	if items, ok := apiErr.Detail.([]any); ok {
+		for _, item := range items {
+			entry, _ := item.(map[string]any)
+			var loc []string
+			if parts, ok := entry["loc"].([]any); ok {
+				for _, part := range parts {
+					loc = append(loc, fmt.Sprint(part))
+				}
+			}
+			reasons = append(reasons, fmt.Sprintf("%s: %v", strings.Join(loc, "."), entry["msg"]))
+		}
+	} else {
+		reasons = append(reasons, apiErr.Message)
+	}
+	for _, d := range apiErr.Details {
+		reasons = append(reasons, fmt.Sprintf("%s: %s", d.Field, d.Message))
+	}
+	summary := fallbackSummary
+	if apiErr.IsStructured() {
+		summary = fmt.Sprintf("[%s] %s", apiErr.ErrorCode, apiErr.Message)
+	}
+	return summary, fmt.Sprintf("phala api error (status %d): %s", apiErr.StatusCode, strings.Join(reasons, "; "))
 }
 
 // composeEnvKeysFromAttrs derives the list of allowed_env keys for an app compose.

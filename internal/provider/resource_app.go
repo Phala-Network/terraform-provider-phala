@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -69,6 +70,19 @@ type appResourceModel struct {
 	GatewayBaseDomain   types.String `tfsdk:"gateway_base_domain"`
 	GatewayCname        types.String `tfsdk:"gateway_cname"`
 	Members             types.List   `tfsdk:"members"`
+	PortPolicy          types.Object `tfsdk:"port_policy"`
+	SwapSize            types.String `tfsdk:"swap_size"`
+	StorageDiscard      types.Bool   `tfsdk:"storage_discard"`
+	Snapshotter         types.String `tfsdk:"snapshotter"`
+	EventLogVersion     types.Int64  `tfsdk:"event_log_version"`
+	Runner              types.String `tfsdk:"runner"`
+	BashScript          types.String `tfsdk:"bash_script"`
+	Requirements        types.Object `tfsdk:"requirements"`
+	InitScripts         types.Set    `tfsdk:"init_scripts"`
+	ConfirmDataWipe     types.Bool   `tfsdk:"confirm_data_wipe"`
+	Annotations         types.Map    `tfsdk:"annotations"`
+	LaunchToken         types.String `tfsdk:"launch_token"`
+	GenerateLaunchToken types.Bool   `tfsdk:"generate_launch_token"`
 }
 
 type appInstanceModel struct {
@@ -123,6 +137,9 @@ func (r *appResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 
 func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	attrs := sharedCVMSchemaAttrs()
+	for name, attribute := range composeConfigSchemaAttrs() {
+		attrs[name] = attribute
+	}
 	// Status can change when readiness is enabled after asynchronous creation.
 	attrs["status"] = schema.StringAttribute{
 		Computed:            true,
@@ -254,8 +271,13 @@ func (r *appResource) ValidateConfig(ctx context.Context, req resource.ValidateC
 // ModifyPlan protects members-mode ownership and invalidates compose_hash
 // when a measured input changes or is explicitly unknown in configuration.
 func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	// Skip on create (no prior state) and destroy (no plan).
-	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+	// Skip destroy (no plan).
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	resp.Diagnostics.Append(planLaunchToken(ctx, req.Config, req.State, &resp.Plan)...)
+	// The rest compares against prior state, which a create does not have.
+	if req.State.Raw.IsNull() || resp.Diagnostics.HasError() {
 		return
 	}
 
@@ -294,7 +316,7 @@ func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 	}
 
 	var plan, state, config appResourceModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(resp.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
@@ -315,7 +337,8 @@ func composeHashInputsChanged(ctx context.Context, plan, state, config appResour
 	// explicitly configured unknown input can resolve differently at apply.
 	if config.Image.IsUnknown() || config.PublicLogs.IsUnknown() ||
 		config.PublicSysinfo.IsUnknown() || config.PublicTCBInfo.IsUnknown() ||
-		config.GatewayEnabled.IsUnknown() || config.SecureTime.IsUnknown() {
+		config.GatewayEnabled.IsUnknown() || config.SecureTime.IsUnknown() ||
+		composeConfigChanged(plan, state, config) {
 		return true, nil
 	}
 	planSettings := composeSettingsValues{
@@ -345,6 +368,36 @@ func composeHashInputsChanged(ctx context.Context, plan, state, config appResour
 		return true, diags
 	}
 	return planKeysKnown && !equalStringSlices(planKeys, stateKeys), diags
+}
+
+// planLaunchToken plans the computed launch_token. A configured token is
+// planned as configured. A generated token keeps its state value, is unknown
+// until Phala Cloud generates it, and is null when no token is wanted.
+func planLaunchToken(ctx context.Context, config tfsdk.Config, state tfsdk.State, plan *tfsdk.Plan) diag.Diagnostics {
+	var diags diag.Diagnostics
+	var configured types.String
+	var generate types.Bool
+	diags.Append(config.GetAttribute(ctx, path.Root("launch_token"), &configured)...)
+	diags.Append(config.GetAttribute(ctx, path.Root("generate_launch_token"), &generate)...)
+	if diags.HasError() || !configured.IsNull() {
+		return diags
+	}
+	planned := types.StringNull()
+	switch {
+	case generate.IsUnknown():
+		planned = types.StringUnknown()
+	case generate.ValueBool():
+		prior := types.StringNull()
+		if !state.Raw.IsNull() {
+			diags.Append(state.GetAttribute(ctx, path.Root("launch_token"), &prior)...)
+		}
+		planned = prior
+		if prior.IsNull() {
+			planned = types.StringUnknown()
+		}
+	}
+	diags.Append(plan.SetAttribute(ctx, path.Root("launch_token"), planned)...)
+	return diags
 }
 
 func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -405,10 +458,14 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		resp.Diagnostics.AddError("Invalid provision parameters", err.Error())
 		return
 	}
+	resp.Diagnostics.Append(applyCreateConfig(ctx, plan, provReq)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	provResp, err := r.client.ProvisionCVM(ctx, provReq)
 	if err != nil {
-		summary, detail := diagnosticFromAPIError("Failed to provision app", err)
+		summary, detail := diagnosticWithoutInput("Failed to provision app", err)
 		resp.Diagnostics.AddError(summary, detail)
 		return
 	}
@@ -461,6 +518,11 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 	plan.AppID = types.StringValue(appID)
 	plan.ComposeHash = nullableString(provResp.ComposeHash)
 	plan.AppEnvEncryptPubkey = nullableString(provResp.AppEnvEncryptPubkey)
+	if createResp.LaunchToken != "" {
+		plan.LaunchToken = types.StringValue(createResp.LaunchToken)
+	} else if plan.LaunchToken.IsUnknown() {
+		plan.LaunchToken = types.StringNull()
+	}
 
 	fetched, err := r.fetchAppAndCVMs(ctx, appID)
 	if err != nil {
@@ -480,6 +542,25 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		plan.LegacyNodeID = types.Int64Null()
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+}
+
+// applyCreateConfig adds the compose settings, init scripts, annotations and
+// launch token to a create request.
+func applyCreateConfig(ctx context.Context, plan appResourceModel, req *phala.ProvisionCVMRequest) diag.Diagnostics {
+	composeCfg, diags := readComposeConfig(ctx, plan)
+	if diags.HasError() {
+		return diags
+	}
+	composeCfg.applyTo(req)
+	if !plan.Annotations.IsNull() {
+		diags.Append(plan.Annotations.ElementsAs(ctx, &req.Annotations, false)...)
+	}
+	if token := stringPtrValue(plan.LaunchToken); token != nil {
+		req.LaunchToken = token
+	} else if plan.GenerateLaunchToken.ValueBool() {
+		req.GenerateLaunchToken = boolPtr(true)
+	}
+	return diags
 }
 
 func (r *appResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -564,16 +645,10 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 
 	desiredComposeEnvKeys, desiredComposeEnvKeysKnown, envKeyDiags := composeEnvKeysFromAttrs(ctx, plan.Env, plan.EnvKeys)
 	resp.Diagnostics.Append(envKeyDiags...)
-	currentComposeEnvKeys, currentComposeEnvKeysKnown, envKeyDiags := composeEnvKeysFromAttrs(ctx, state.Env, state.EnvKeys)
+	currentComposeEnvKeys, _, envKeyDiags := composeEnvKeysFromAttrs(ctx, state.Env, state.EnvKeys)
 	resp.Diagnostics.Append(envKeyDiags...)
 	if resp.Diagnostics.HasError() {
 		return
-	}
-	composeEnvKeys := currentComposeEnvKeys
-	composeHasEnvKeys := currentComposeEnvKeysKnown
-	if desiredComposeEnvKeysKnown {
-		composeEnvKeys = desiredComposeEnvKeys
-		composeHasEnvKeys = true
 	}
 	updateComposeEnvKeys := desiredComposeEnvKeysKnown && !equalStringSlices(desiredComposeEnvKeys, currentComposeEnvKeys)
 
@@ -589,6 +664,18 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	bootstrapID := selectPrimaryIdentifier(plan.PrimaryCVMID, state.PrimaryCVMID, cvms, plan.Name.ValueString())
 	if bootstrapID == "" {
 		resp.Diagnostics.AddError("No CVM found for app", "App has no CVMs available for update operations.")
+		return
+	}
+
+	launchTokenHash, clearLaunchToken, err := updateLaunchToken(ctx, r.client, appID, &plan, state)
+	if err != nil {
+		summary, detail := diagnosticWithoutInput("Failed to set app launch token", err)
+		resp.Diagnostics.AddError(summary, detail)
+		return
+	}
+	composeReq, composeDiags := buildComposeUpdateRequest(ctx, plan, state, desiredComposeEnvKeys, updateComposeEnvKeys, launchTokenHash)
+	resp.Diagnostics.Append(composeDiags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
@@ -640,10 +727,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 			envChanged:      envChanged,
 			imageChanged:    imageChanged,
 			diskSizeChanged: diskSizeChanged,
-			composeEnvKeys:  composeEnvKeys,
-			composeHasKeys:  composeHasEnvKeys,
-			updateEnvKeys:   updateComposeEnvKeys,
-			settingsChanged: settingsChanged,
+			composeReq:      composeReq,
 			listedChanged:   listedChanged,
 		}); diags.HasError() {
 			resp.Diagnostics.Append(diags...)
@@ -661,13 +745,31 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 			envChanged:      envChanged,
 			imageChanged:    imageChanged,
 			diskSizeChanged: diskSizeChanged,
-			composeEnvKeys:  composeEnvKeys,
-			composeHasKeys:  composeHasEnvKeys,
-			updateEnvKeys:   updateComposeEnvKeys,
-			settingsChanged: settingsChanged,
+			composeReq:      composeReq,
 			listedChanged:   listedChanged,
 		}); diags.HasError() {
 			resp.Diagnostics.Append(diags...)
+			return
+		}
+	}
+
+	if !plan.Annotations.Equal(state.Annotations) {
+		targets := []string{bootstrapID}
+		if membersMode {
+			targets = collectVMUUIDs(cvms)
+		}
+		if err := putAnnotations(ctx, r.client, targets, plan.Annotations); err != nil {
+			summary, detail := diagnosticFromAPIError("Failed to update app annotations", err)
+			resp.Diagnostics.AddError(summary, detail)
+			return
+		}
+	}
+
+	// Each CVM's compose update drops the hash, so the token can go.
+	if clearLaunchToken {
+		if err := r.client.ClearAppLaunchToken(ctx, appIDWithoutPrefix(appID)); err != nil {
+			summary, detail := diagnosticFromAPIError("Failed to clear app launch token", err)
+			resp.Diagnostics.AddError(summary, detail)
 			return
 		}
 	}
@@ -1354,17 +1456,6 @@ func appPath(id string) string {
 func appIDWithoutPrefix(id string) string {
 	trimmed := strings.TrimSpace(id)
 	return strings.TrimPrefix(trimmed, "app_")
-}
-
-func stringFromAny(v any) string {
-	switch t := v.(type) {
-	case string:
-		return strings.TrimSpace(t)
-	case fmt.Stringer:
-		return strings.TrimSpace(t.String())
-	default:
-		return ""
-	}
 }
 
 // buildUpdateEnvsRequest converts a generic env update map to the SDK type.

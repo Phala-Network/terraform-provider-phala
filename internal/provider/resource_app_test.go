@@ -776,6 +776,8 @@ func TestComposeHashInputsChanged(t *testing.T) {
 			GatewayEnabled: types.BoolValue(true),
 			SecureTime:     types.BoolValue(false),
 			EnvKeys:        types.ListValueMust(types.StringType, []attr.Value{types.StringValue("A")}),
+			InitScripts:    types.SetNull(types.StringType),
+			LaunchToken:    types.StringValue("existing-launch-token-of-at-least-32-bytes"),
 		}
 	}
 	for _, tc := range []struct {
@@ -818,6 +820,20 @@ func TestComposeHashInputsChanged(t *testing.T) {
 		{"empty allowlist", func(m *appResourceModel) {
 			m.EnvKeys = types.ListValueMust(types.StringType, []attr.Value{})
 		}, nil, true},
+		{"swap size", func(m *appResourceModel) { m.SwapSize = types.StringValue("2G") }, nil, true},
+		{"requirements", func(m *appResourceModel) {
+			m.Requirements = types.ObjectUnknown(map[string]attr.Type{})
+		}, nil, true},
+		{"init scripts", func(m *appResourceModel) {
+			m.InitScripts = types.SetValueMust(types.StringType, []attr.Value{types.StringValue("docker_cleanup")})
+		}, nil, true},
+		{"launch token generated", func(m *appResourceModel) { m.LaunchToken = types.StringUnknown() }, func(m *appResourceModel) {
+			m.LaunchToken = types.StringNull()
+		}, true},
+		{"launch token removed", func(m *appResourceModel) { m.LaunchToken = types.StringNull() }, nil, true},
+		{"annotations only", func(m *appResourceModel) {
+			m.Annotations = types.MapValueMust(types.StringType, map[string]attr.Value{"tier": types.StringValue("fast")})
+		}, nil, false},
 		{"ciphertext only", func(m *appResourceModel) { m.EncryptedEnv = types.StringValue("deadbeef") }, nil, false},
 		{"placement only", func(m *appResourceModel) { m.Size = types.StringValue("tdx.large") }, nil, false},
 	} {
