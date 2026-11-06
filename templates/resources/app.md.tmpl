@@ -36,7 +36,7 @@ Downstream `phala_app_instance` resources should set `for_each = toset(phala_app
 
 - **Compose changes** (`docker_compose`, `pre_launch_script`, `public_*`, `gateway_enabled`, `secure_time`, env-key list changes, the compose settings below, `init_scripts`, the launch token hash) go through the cloud's app-revision endpoint. The provider applies them to the bootstrap CVM with one `PATCH /cvms/{id}` that sends only the changed keys (creating a new revision row), then `POST /apps/{id}/revisions/{rev}/redeploy` fans the same revision out to every other slot. Each CVM's `compose_hash` flips to the new value; nothing is destroyed and recreated.
 - **Env value changes** use a per-CVM `PATCH /cvms/{uuid}/envs` fan-out by default. Set `env_update_scope = "bootstrap"` when `phala_app_instance` resources own the other slots' environments. The parent then updates only its bootstrap CVM and leaves per-slot values intact. `compose_hash` stays unchanged.
-- **OS image, instance size, and disk size changes** fan out via `PATCH /cvms/{uuid}/os-image` and `PATCH /cvms/{uuid}/resources` respectively — the cloud has no app-level analog. Sequential, fail-fast.
+- **OS image, instance size, and disk size changes** fan out per CVM — the OS image via `PATCH /cvms/{uuid}/os-image`, instance size and disk size via `PATCH /cvms/{uuid}` — because the cloud has no app-level analog. Sequential, fail-fast.
 
 The one structural change still blocked is **removing the `members` attribute** from a previously-members-mode app: that would leave the `phala_app_instance` slots orphaned. The provider blocks this at plan time and asks you to destroy and recreate.
 
