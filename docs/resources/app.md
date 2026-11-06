@@ -79,8 +79,8 @@ The one structural change still blocked is **removing the `members` attribute** 
 ## Compose settings, init scripts, annotations and launch token
 
 - Every compose change of one apply is sent as a single `PATCH /cvms/{id}` whose `compose` object is a JSON Merge Patch: only changed keys are sent, a removed attribute is sent as `null`, and compose keys the provider does not manage stay as they are.
-- `runner`, `bash_script` and `requirements.gpu_policy` cannot be changed after create; changing them replaces the app. `storage_fs` was already force-new.
-- `port_policy`, `swap_size`, `storage_discard`, `snapshotter`, `event_log_version`, `gateway_enabled`, `secure_time`, the other `requirements` keys and `init_scripts` update in place with a restart. Turning on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk` for an existing app erases data on every boot and needs `confirm_data_wipe = true`.
+- `runner` and `requirements.gpu_policy` cannot be changed after create; changing them replaces the app. `storage_fs` was already force-new.
+- `bash_script`, `port_policy`, `swap_size`, `storage_discard`, `snapshotter`, `event_log_version`, `gateway_enabled`, `secure_time`, the other `requirements` keys and `init_scripts` update in place with a restart. Turning on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk` for an existing app erases data on every boot and needs `confirm_data_wipe = true`.
 - These settings are kept as configured in state; the provider does not read them back from the cloud.
 - `annotations` (feature-flagged) are per-VM host settings. They are applied to the bootstrap CVM at create and, when the attribute changes, replace the whole map on the app's existing CVMs without a restart or a compose change. CVMs added later, such as `phala_app_instance` slots, start without them. They are not read back either.
 - `launch_token` is stored in state as a sensitive value. Changing it sets the new token on the app first, then updates each CVM's `requirements.launch_token_hash`; a CVM that restarts in between fails to boot until its compose is updated. Removing it removes the hash from every CVM's compose, then clears the token.
@@ -132,7 +132,7 @@ The `replicas` attribute was removed in 0.3.0-beta.1. Any HCL setting `replicas`
 ### Optional
 
 - `annotations` (Map of String) Host-side key/value metadata the dstack VMM stores per VM (dstack VMM 0.6.1+). Not measured: tenants must not rely on it for security. Needs the `cvm_annotations` feature flag. Applied to the app's bootstrap CVM at create, and to the app's existing CVMs when the attribute changes, by replacing the whole map without a restart; host tools that read annotations when the CVM starts see the change after the next restart. CVMs added later, such as `phala_app_instance` slots, do not inherit them. Removing the attribute clears the annotations on the existing CVMs.
-- `bash_script` (String) Script the `bash` runner executes instead of a Docker Compose file; set `docker_compose = ""` with it. Changing this forces replacement.
+- `bash_script` (String) Script the `bash` runner executes instead of a Docker Compose file; set `docker_compose = ""` with it. Changing it triggers compose update/restart.
 - `confirm_data_wipe` (Boolean) Confirms an update that turns on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk`, which erase data on every boot. Not needed on create.
 - `custom_app_id` (String) Optional custom app_id for deterministic identity flow. Changing this forces replacement.
 - `disk_size` (Number) Disk size in GB.
