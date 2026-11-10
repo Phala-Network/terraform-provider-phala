@@ -3,7 +3,7 @@ module github.com/Phala-Network/terraform-provider-phala
 go 1.25.0
 
 require (
-	github.com/Phala-Network/phala-cloud/sdks/go v0.0.0
+	github.com/Phala-Network/phala-cloud/sdks/go v0.5.0
 	github.com/hashicorp/terraform-plugin-framework v1.16.1
 	github.com/hashicorp/terraform-plugin-go v0.29.0
 	golang.org/x/time v0.12.0
