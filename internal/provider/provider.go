@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -40,6 +41,15 @@ type phalaProviderModel struct {
 	APIPrefix      types.String `tfsdk:"api_prefix"`
 	APIVersion     types.String `tfsdk:"api_version"`
 	TimeoutSeconds types.Int64  `tfsdk:"timeout_seconds"`
+}
+
+func clientUserAgent(providerVersion, terraformVersion string) string {
+	return fmt.Sprintf(
+		"terraform-provider-phala/%s terraform/%s %s",
+		providerVersion,
+		terraformVersion,
+		phala.DefaultUserAgent(),
+	)
 }
 
 func New(version string) func() provider.Provider {
@@ -139,6 +149,7 @@ func (p *phalaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		phala.WithAPIKey(apiKey),
 		phala.WithAPIVersion(apiVersion),
 		phala.WithTimeout(time.Duration(timeoutSec)*time.Second),
+		phala.WithUserAgent(clientUserAgent(p.version, req.TerraformVersion)),
 	)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create API client", err.Error())
