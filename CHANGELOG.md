@@ -4,6 +4,18 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-25
+
+First stable release of the 0.3 line. It contains every change from 0.3.0-beta.1 through 0.3.0-beta.5 below, plus the following.
+
+### Added
+
+- The provider identifies itself in the Phala Cloud API `User-Agent` as `terraform-provider-phala/<version> terraform/<version>`, followed by the Go SDK's own `User-Agent`.
+
+### Changed
+
+- Built with the Phala Cloud Go SDK on dstack SDK 0.6 (`github.com/Dstack-TEE/dstack/sdk/go/dstack` v0.6.1). Encrypted environment values keep the same format. Building the provider from source now needs Go 1.26.
+
 ## [0.3.0-beta.5] - 2026-11-07
 
 ### Added

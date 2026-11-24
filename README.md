@@ -62,7 +62,7 @@ terraform {
   required_providers {
     phala = {
       source  = "phala-network/phala"
-      version = "0.2.0-beta.1" # or newer published version
+      version = "~> 0.3.0"
     }
   }
 }
