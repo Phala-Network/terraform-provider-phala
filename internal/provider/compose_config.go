@@ -133,14 +133,18 @@ func composeConfigSchemaAttrs() map[string]schema.Attribute {
 		"init_scripts": schema.SetAttribute{
 			Optional:    true,
 			ElementType: types.StringType,
-			MarkdownDescription: "Platform init scripts every CVM of the app runs on boot: `docker_cleanup` (erases all container images " +
-				"and volumes on every boot) and `env_merge` (feature-flagged). Changing it triggers compose update/restart; " +
-				"turning `docker_cleanup` on for an existing app also needs `confirm_data_wipe = true`. Removing the attribute removes every script.",
+			MarkdownDescription: "Names of the init scripts Phala Cloud provides that every CVM of the app runs on boot. " +
+				"You can only select from that list (`GET /managed-init-scripts`); you cannot supply your own script. " +
+				"Known scripts: `docker_cleanup` (erases all container images and volumes on every boot), " +
+				"`env_merge` (feature-flagged), and `runtime_tmpfs` (keeps Docker and containerd storage in memory; " +
+				"needs dstack OS 0.6.x, and cannot be combined with `docker_cleanup` or with `sysbox-runc` services). " +
+				"Changing it triggers compose update/restart; turning `docker_cleanup` or `runtime_tmpfs` on for an existing app " +
+				"also needs `confirm_data_wipe = true`. Removing the attribute removes every script.",
 		},
 		"confirm_data_wipe": schema.BoolAttribute{
 			Optional: true,
-			MarkdownDescription: "Confirms an update that turns on `init_scripts` `docker_cleanup` or `requirements.ephemeral_data_disk`, " +
-				"which erase data on every boot. Not needed on create.",
+			MarkdownDescription: "Confirms an update that turns on the `docker_cleanup` or `runtime_tmpfs` init script or " +
+				"`requirements.ephemeral_data_disk`, which erase data on every boot. Not needed on create.",
 		},
 		"annotations": schema.MapAttribute{
 			Optional:    true,

@@ -23,6 +23,9 @@ func newTestPhalaClient(t *testing.T, baseURL string) *phala.Client {
 		phala.WithAPIKey("phat_test_key"),
 		phala.WithAPIVersion("2026-01-21"),
 		phala.WithTimeout(5*time.Second),
+		// The SDK retries 429/503 reads up to 30 times with backoff; tests that
+		// answer 503 on purpose would otherwise wait for minutes.
+		phala.WithMaxRetries(0),
 	)
 	if err != nil {
 		t.Fatalf("create phala client: %v", err)

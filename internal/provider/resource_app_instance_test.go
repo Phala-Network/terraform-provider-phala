@@ -227,7 +227,7 @@ func TestAppInstanceCreatePostsNameAndPollsForReady(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/apps/test/instances":
 			body, _ := io.ReadAll(r.Body)
 			capturedBody.Store(body)
-			writeJSON(t, w, http.StatusOK, `{"vm_uuid":"vm-new","name":"consul-1","status":"pending","app_id":"app_test"}`)
+			writeJSON(t, w, http.StatusOK, `{"id":"cvm_abc","vm_uuid":"vm-new","instance_id":"inst-1","name":"consul-1","status":"pending","teepod_id":3,"app_id":"app_test","vcpu":1,"memory":2048,"disk_size":20,"created_at":"2026-05-18T00:00:00Z"}`)
 			return
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/apps/test/cvms":
 			n := listCallCount.Add(1)
@@ -266,7 +266,7 @@ func TestAppInstanceCreatePostsNameAndPollsForReady(t *testing.T) {
 		t.Fatalf("create POST failed: %v", err)
 	}
 
-	if cvmInfoVMUUID(created) != "vm-new" || created.Name != "consul-1" {
+	if created.VMUUID == nil || *created.VMUUID != "vm-new" || created.Name != "consul-1" || created.ID != "cvm_abc" {
 		t.Fatalf("unexpected create response: %#v", created)
 	}
 
@@ -297,8 +297,14 @@ func TestAppInstanceCreatePostsNameAndPollsForReady(t *testing.T) {
 		t.Fatalf("expected POST body name=consul-1, got %#v", got)
 	}
 
+	mapped := cvmInfoFromReplicaVM(*created)
+	if mapped.ID != "cvm_abc" || cvmInfoVMUUID(&mapped) != "vm-new" || cvmInfoInstanceID(&mapped) != "inst-1" ||
+		cvmInfoAppID(&mapped) != "app_test" || mapped.Status != "pending" || mapped.CreatedAt == nil || *mapped.CreatedAt != "2026-05-18T00:00:00Z" {
+		t.Fatalf("ReplicaVM mapped wrongly: %#v", mapped)
+	}
+
 	// Populate state and check the durable ID.
-	merged := mergeCVMResponse(*created, ready)
+	merged := mergeCVMResponse(cvmInfoFromReplicaVM(*created), ready)
 	state := appInstanceResourceModel{}
 	populateAppInstanceState(&state, appID, name, merged)
 	if state.ID.ValueString() != "app_test:consul-1" {

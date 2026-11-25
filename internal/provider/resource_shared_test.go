@@ -200,8 +200,8 @@ func TestBuildProvisionReq(t *testing.T) {
 		if req.InstanceType != "tdx.small" {
 			t.Errorf("instance_type = %v", req.InstanceType)
 		}
-		if req.KMSType == nil || *req.KMSType != "PHALA" {
-			t.Errorf("kms = %v", req.KMSType)
+		if req.KMS == nil || *req.KMS != "PHALA" {
+			t.Errorf("kms = %v", req.KMS)
 		}
 		if req.Node == nil || *req.Node != "physical-node" {
 			t.Errorf("node = %v", req.Node)
@@ -230,14 +230,14 @@ func TestBuildProvisionReq(t *testing.T) {
 		if req.Node == nil || *req.Node != "physical-node" {
 			t.Errorf("node = %v", req.Node)
 		}
-		if req.KMSType == nil || *req.KMSType != "ETHEREUM" {
-			t.Errorf("kms = %v", req.KMSType)
+		if req.KMS == nil || *req.KMS != "ETHEREUM" {
+			t.Errorf("kms = %v", req.KMS)
 		}
 		if req.Image == nil || *req.Image != "dstack-v0.3.5" {
 			t.Errorf("image = %v", req.Image)
 		}
-		if req.CustomAppID == nil || *req.CustomAppID != "custom123" {
-			t.Errorf("app_id = %v", req.CustomAppID)
+		if req.AppID == nil || *req.AppID != "custom123" {
+			t.Errorf("app_id = %v", req.AppID)
 		}
 		if req.Nonce == nil || *req.Nonce != 7 {
 			t.Errorf("nonce = %v", req.Nonce)
@@ -428,4 +428,50 @@ func TestEnvConfigBuildUpdateReq(t *testing.T) {
 			t.Error("expected error for missing encrypted_env")
 		}
 	})
+}
+
+// The server reads `kms` and `app_id` on provision and ignores unknown keys,
+// so the JSON body must use exactly these names.
+func TestProvisionRequestJSONCarriesKMSAndAppID(t *testing.T) {
+	for _, tc := range []struct{ kms, want string }{
+		{"phala", "PHALA"},
+		{"ethereum", "ETHEREUM"},
+		{"base", "BASE"},
+	} {
+		t.Run(tc.kms, func(t *testing.T) {
+			req, err := buildProvisionReq(provisionFields{
+				Name:           "test-cvm",
+				Size:           "tdx.small",
+				KMS:            tc.kms,
+				Region:         types.StringNull(),
+				Node:           types.StringNull(),
+				Image:          types.StringNull(),
+				DiskSize:       types.Int64Null(),
+				CustomAppID:    "custom123",
+				HasCustomAppID: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["kms"] != tc.want {
+				t.Errorf("kms = %v, want %s (body %s)", body["kms"], tc.want, raw)
+			}
+			if body["app_id"] != "custom123" {
+				t.Errorf("app_id = %v (body %s)", body["app_id"], raw)
+			}
+			for _, key := range []string{"kms_type", "custom_app_id"} {
+				if _, ok := body[key]; ok {
+					t.Errorf("body must not carry %q: %s", key, raw)
+				}
+			}
+		})
+	}
 }

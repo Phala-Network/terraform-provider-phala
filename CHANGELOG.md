@@ -4,6 +4,15 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `phala_app` (and the `phala_app_preflight` data source) now create the app on the KMS you choose. Before, `kms = "ethereum"` or `kms = "base"` silently created an app on Phala KMS, and `custom_app_id` was ignored. Apps already created are not changed; check the `kms` of existing apps.
+
+### Changed
+
+- Built against the Go SDK changes that send `kms` and `app_id` on provision, and decode the app instance create response in its real shape.
+- Documented the `runtime_tmpfs` init script on `phala_app`. `init_scripts` only selects scripts Phala Cloud provides.
+
 ## [0.3.0] - 2026-11-25
 
 First stable release of the 0.3 line. It contains every change from 0.3.0-beta.1 through 0.3.0-beta.5 below, plus the following.
