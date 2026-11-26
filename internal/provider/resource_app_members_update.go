@@ -339,7 +339,7 @@ func (r *appResource) patchOSImageAcrossCVMs(
 		if id == "" {
 			continue
 		}
-		if err := r.client.UpdateOSImage(ctx, id, req); err != nil {
+		if _, err := r.client.UpdateOSImage(ctx, id, req); err != nil {
 			return fmt.Errorf("patch os-image on CVM %s: %w", id, err)
 		}
 	}
@@ -620,7 +620,7 @@ func (r *appResource) applySingleCVMUpdate(ctx context.Context, a applySingleCVM
 			diags.AddError("Invalid image update", "image must be set to a target OS image name when updating.")
 			return diags
 		}
-		if err := r.client.UpdateOSImage(ctx, a.bootstrapID, &phala.UpdateOSImageRequest{OSImageName: a.plan.Image.ValueString()}); err != nil {
+		if _, err := r.client.UpdateOSImage(ctx, a.bootstrapID, &phala.UpdateOSImageRequest{OSImageName: a.plan.Image.ValueString()}); err != nil {
 			diags.AddError("Failed to update app OS image", err.Error())
 			return diags
 		}
