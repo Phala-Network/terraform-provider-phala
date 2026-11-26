@@ -288,7 +288,7 @@ func buildProvisionReq(f provisionFields) (*phala.ProvisionCVMRequest, error) {
 	req := &phala.ProvisionCVMRequest{
 		Name:         f.Name,
 		InstanceType: f.Size,
-		KMSType:      &kms,
+		KMS:          &kms,
 		Listed:       &listed,
 	}
 
@@ -344,7 +344,7 @@ func buildProvisionReq(f provisionFields) (*phala.ProvisionCVMRequest, error) {
 		req.Image = &img
 	}
 	if f.HasCustomAppID {
-		req.CustomAppID = &f.CustomAppID
+		req.AppID = &f.CustomAppID
 	}
 	if f.HasNonce {
 		req.Nonce = &f.Nonce

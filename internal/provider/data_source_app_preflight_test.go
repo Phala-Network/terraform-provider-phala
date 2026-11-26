@@ -57,8 +57,8 @@ func TestBuildAppPreflightProvisionReq(t *testing.T) {
 	if req.Listed == nil || *req.Listed {
 		t.Fatalf("unexpected listed: %#v", req.Listed)
 	}
-	if req.KMSType == nil || *req.KMSType != "PHALA" {
-		t.Fatalf("unexpected kms_type: %#v", req.KMSType)
+	if req.KMS == nil || *req.KMS != "PHALA" {
+		t.Fatalf("unexpected kms_type: %#v", req.KMS)
 	}
 
 	if req.ComposeFile == nil {
@@ -107,8 +107,8 @@ func TestBuildAppPreflightProvisionReqDefaults(t *testing.T) {
 	if req.Node != nil {
 		t.Fatalf("automatic placement sent node: %#v", req.Node)
 	}
-	if req.KMSType == nil || *req.KMSType != "PHALA" {
-		t.Fatalf("default kms_type = %#v", req.KMSType)
+	if req.KMS == nil || *req.KMS != "PHALA" {
+		t.Fatalf("default kms_type = %#v", req.KMS)
 	}
 	if req.Listed == nil || *req.Listed {
 		t.Fatalf("default listed = %#v", req.Listed)

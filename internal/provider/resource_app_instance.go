@@ -467,7 +467,7 @@ func (r *appInstanceResource) Create(ctx context.Context, req resource.CreateReq
 		resp.Diagnostics.AddError("Failed to confirm new app instance", err.Error())
 		return
 	}
-	merged := mergeCVMResponse(*created, resolved)
+	merged := mergeCVMResponse(cvmInfoFromReplicaVM(*created), resolved)
 
 	if shouldWait(plan.WaitForReady) || plan.WaitForIdentity.ValueBool() {
 		ready, err := r.waitForInstanceState(ctx, appID, name, deadline, plan.WaitForIdentity.ValueBool(), shouldWait(plan.WaitForReady))
@@ -965,6 +965,26 @@ func findInstanceByName(cvms []phala.CVMInfo, name string) *phala.CVMInfo {
 		}
 	}
 	return nil
+}
+
+// cvmInfoFromReplicaVM maps the create response to the CVMInfo fields it
+// carries. The remaining state comes from the follow-up CVM list read.
+func cvmInfoFromReplicaVM(vm phala.ReplicaVM) phala.CVMInfo {
+	info := phala.CVMInfo{ID: vm.ID}
+	info.Name = vm.Name
+	info.Status = vm.Status
+	info.AppID = nonEmptyStringPtr(vm.AppID)
+	info.VMUUID = vm.VMUUID
+	info.InstanceID = vm.InstanceID
+	info.CreatedAt = nonEmptyStringPtr(vm.CreatedAt)
+	return info
+}
+
+func nonEmptyStringPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // mergeCVMResponse fills empty fields in `base` from `extra` so we can combine
