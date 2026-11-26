@@ -4,6 +4,8 @@ All notable changes to `terraform-provider-phala` are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-26
+
 ### Fixed
 
 - `phala_app` (and the `phala_app_preflight` data source) now create the app on the KMS you choose. Before, `kms = "ethereum"` or `kms = "base"` silently created an app on Phala KMS, and `custom_app_id` was ignored. Apps already created are not changed; check the `kms` of existing apps.
